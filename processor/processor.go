@@ -17,15 +17,35 @@ type ImageProcessor struct {
 func (p *ImageProcessor) ProcessJPEG(jpgPath, rawPath string) error {
     rating, err := jpeg.GetRating(jpgPath)
     if err != nil {
+        if os.IsNotExist(err) {
+            fmt.Printf("Info: JPEG nicht gefunden: %s\n", jpgPath)
+            return nil
+        }
         fmt.Printf("Warnung: Konnte Bewertung für %s nicht lesen: %v\n", jpgPath, err)
+        return nil
+    }
+
+    // Prüfe ob RAW existiert bevor wir weitermachen
+    if _, err := os.Stat(rawPath); err != nil {
+        if os.IsNotExist(err) {
+            fmt.Printf("Info: RAW nicht gefunden: %s\n", rawPath)
+            return nil
+        }
+        fmt.Printf("Warnung: Fehler beim Zugriff auf RAW %s: %v\n", rawPath, err)
         return nil
     }
 
     switch rating {
     case 1:
-        return p.handleRating1(jpgPath, rawPath)
+        if err := p.handleRating1(jpgPath, rawPath); err != nil {
+            fmt.Printf("Warnung: Fehler bei Rating 1 Verarbeitung von %s: %v\n", jpgPath, err)
+            return nil
+        }
     case 2:
-        return p.handleRating2(jpgPath, rawPath)
+        if err := p.handleRating2(jpgPath, rawPath); err != nil {
+            fmt.Printf("Warnung: Fehler bei Rating 2 Verarbeitung von %s: %v\n", jpgPath, err)
+            return nil
+        }
     }
 
     return nil
@@ -63,9 +83,22 @@ func (p *ImageProcessor) deleteFiles(paths ...string) error {
 }
 
 func (p *ImageProcessor) ProcessDirectory(rawDir string, parentDir string) error {
+    // Prüfe ob raw-Verzeichnis existiert
+    if _, err := os.Stat(rawDir); err != nil {
+        if os.IsNotExist(err) {
+            fmt.Printf("Info: Überspringe nicht existierendes Verzeichnis: %s\n", rawDir)
+            return nil
+        }
+        return fmt.Errorf("Fehler beim Zugriff auf Verzeichnis %s: %v", rawDir, err)
+    }
+
     // Zuerst: Prüfe alle JPEGs auf Bewertungen
     jpegFiles, err := os.ReadDir(parentDir)
     if err != nil {
+        if os.IsNotExist(err) {
+            fmt.Printf("Info: Überspringe nicht existierendes Verzeichnis: %s\n", parentDir)
+            return nil
+        }
         return fmt.Errorf("Fehler beim Lesen des JPEG-Verzeichnisses %s: %v", parentDir, err)
     }
 
@@ -76,8 +109,14 @@ func (p *ImageProcessor) ProcessDirectory(rawDir string, parentDir string) error
             rawName := file.Name()[:len(file.Name())-len(constants.JpegExtension)] + constants.RawExtension
             rawPath := filepath.Join(rawDir, rawName)
 
+            if _, err := os.Stat(rawPath); err != nil && os.IsNotExist(err) {
+                fmt.Printf("Info: Keine RAW-Datei gefunden für: %s\n", jpgPath)
+                continue
+            }
+
             if err := p.ProcessJPEG(jpgPath, rawPath); err != nil {
-                return fmt.Errorf("Fehler bei der Verarbeitung von %s: %v", jpgPath, err)
+                fmt.Printf("Warnung: Fehler bei der Verarbeitung von %s: %v\n", jpgPath, err)
+                continue
             }
         }
     }
@@ -85,6 +124,10 @@ func (p *ImageProcessor) ProcessDirectory(rawDir string, parentDir string) error
     // Danach: Prüfe alle RAWs ohne zugehöriges JPEG
     rawFiles, err := os.ReadDir(rawDir)
     if err != nil {
+        if os.IsNotExist(err) {
+            fmt.Printf("Info: Überspringe nicht existierendes Verzeichnis: %s\n", rawDir)
+            return nil
+        }
         return fmt.Errorf("Fehler beim Lesen des RAW-Verzeichnisses %s: %v", rawDir, err)
     }
 
@@ -96,13 +139,15 @@ func (p *ImageProcessor) ProcessDirectory(rawDir string, parentDir string) error
 
             // Prüfe ob JPEG existiert
             if _, err := os.Stat(jpgPath); err != nil {
-                if errors.Is(err, os.ErrNotExist) {
-                    fmt.Printf("Lösche %s (keine zugehörige JPG-Datei gefunden)\n", rawPath)
+                if os.IsNotExist(err) {
                     if err := p.deleteFile(rawPath); err != nil {
-                        return fmt.Errorf("Fehler beim Löschen von %s: %v", rawPath, err)
+                        fmt.Printf("Warnung: Fehler beim Löschen von %s: %v\n", rawPath, err)
+                        continue
                     }
+                    fmt.Printf("Info: RAW-Datei gelöscht (keine JPG gefunden): %s\n", rawPath)
                 } else {
-                    return fmt.Errorf("Fehler beim Prüfen von %s: %v", jpgPath, err)
+                    fmt.Printf("Warnung: Fehler beim Prüfen von %s: %v\n", jpgPath, err)
+                    continue
                 }
             }
         }
@@ -114,12 +159,18 @@ func (p *ImageProcessor) ProcessDirectory(rawDir string, parentDir string) error
 func (p *ImageProcessor) Walk() error {
     return filepath.Walk(p.RootDir, func(path string, info os.FileInfo, err error) error {
         if err != nil {
-            return err
+            if os.IsNotExist(err) {
+                fmt.Printf("Info: Überspringe nicht existierenden Pfad: %s\n", path)
+                return nil
+            }
+            fmt.Printf("Warnung: Fehler beim Zugriff auf %s: %v\n", path, err)
+            return nil
         }
         if info.IsDir() && info.Name() == "raw" {
             parentDir := filepath.Dir(path)
             if err := p.ProcessDirectory(path, parentDir); err != nil {
-                return fmt.Errorf("Fehler bei der Verarbeitung von %s: %v", path, err)
+                fmt.Printf("Warnung: Fehler bei der Verarbeitung von %s: %v\n", path, err)
+                return nil // Weitermachen statt abbrechen
             }
         }
         return nil
