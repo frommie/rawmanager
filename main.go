@@ -7,7 +7,19 @@ import (
 )
 
 func main() {
-    photosDir := os.ExpandEnv("${HOME}/Desktop/Kamera_test")
+    var photosDir string
+    
+    // Prüfe ob ein Pfad als Parameter übergeben wurde
+    if len(os.Args) > 1 {
+        photosDir = os.Args[1]
+    } else {
+        // Verwende aktuelles Arbeitsverzeichnis wenn kein Parameter angegeben
+        var err error
+        photosDir, err = os.Getwd()
+        if err != nil {
+            log.Fatal("Fehler beim Ermitteln des aktuellen Verzeichnisses:", err)
+        }
+    }
     
     proc := &processor.ImageProcessor{
         RootDir: photosDir,
