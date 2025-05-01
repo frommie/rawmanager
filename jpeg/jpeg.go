@@ -66,13 +66,13 @@ func GetRating(jpgPath string) (int, error) {
 }
 
 func ResizeWithXMP(jpgPath string) error {
-    // Lese zunächst die XMP-Daten aus dem Original
+    // Lese Original-Datei
     data, err := os.ReadFile(jpgPath)
     if err != nil {
         return fmt.Errorf("Fehler beim Lesen der Datei: %v", err)
     }
 
-    // Extrahiere XMP-Segment
+    // Extrahiere EXIF und XMP
     jmp := jpegstructure.NewJpegMediaParser()
     intfc, err := jmp.ParseBytes(data)
     if err != nil {
@@ -80,11 +80,19 @@ func ResizeWithXMP(jpgPath string) error {
     }
 
     sl := intfc.(*jpegstructure.SegmentList)
+    
+    // Speichere EXIF-Segment
+    var exifSegment *jpegstructure.Segment
     var xmpSegment *jpegstructure.Segment
+    
     for _, segment := range sl.Segments() {
+        // XMP finden
         if segment.MarkerId == constants.App1MarkerId && bytes.HasPrefix(segment.Data, []byte(constants.XmpNamespace)) {
             xmpSegment = segment
-            break
+        }
+        // EXIF finden (0xE1 ist der Marker für beide, EXIF und XMP)
+        if segment.MarkerId == constants.App1MarkerId && !bytes.HasPrefix(segment.Data, []byte(constants.XmpNamespace)) {
+            exifSegment = segment
         }
     }
 
@@ -116,47 +124,59 @@ func ResizeWithXMP(jpgPath string) error {
     }
     defer os.Remove(tempPath)
 
-    // Füge XMP-Segment wieder ein
-    if xmpSegment != nil {
-        newData, err := os.ReadFile(tempPath)
-        if err != nil {
-            return fmt.Errorf("Fehler beim Lesen des temporären Bildes: %v", err)
-        }
+    // Lese temporäre Datei
+    newData, err := os.ReadFile(tempPath)
+    if err != nil {
+        return fmt.Errorf("Fehler beim Lesen des temporären Bildes: %v", err)
+    }
 
-        newIntfc, err := jmp.ParseBytes(newData)
-        if err != nil {
-            return fmt.Errorf("Fehler beim Parsen des temporären Bildes: %v", err)
-        }
+    newIntfc, err := jmp.ParseBytes(newData)
+    if err != nil {
+        return fmt.Errorf("Fehler beim Parsen des temporären Bildes: %v", err)
+    }
 
-        newSl := newIntfc.(*jpegstructure.SegmentList)
-        segments := newSl.Segments()
-        
-        insertPos := 1
-        for i, seg := range segments {
-            if seg.MarkerId == 0xE0 { // APP0
-                insertPos = i + 1
-                break
-            }
-        }
-        
-        var newSegments []*jpegstructure.Segment
-        newSegments = append(newSegments, segments[:insertPos]...)
-        newSegments = append(newSegments, xmpSegment)
-        newSegments = append(newSegments, segments[insertPos:]...)
-        
-        newJpeg := jpegstructure.NewSegmentList(newSegments)
+    newSl := newIntfc.(*jpegstructure.SegmentList)
+    segments := newSl.Segments()
 
-        var buffer bytes.Buffer
-        if err := newJpeg.Write(&buffer); err != nil {
-            return fmt.Errorf("Fehler beim Serialisieren der JPEG-Daten: %v", err)
-        }
-
-        if err := os.WriteFile(jpgPath, buffer.Bytes(), 0644); err != nil {
-            return fmt.Errorf("Fehler beim Speichern der finalen JPEG: %v", err)
+    // Füge EXIF und XMP an der richtigen Position ein
+    insertPos := 1
+    for i, seg := range segments {
+        if seg.MarkerId == 0xE0 { // APP0
+            insertPos = i + 1
+            break
         }
     }
 
-    fmt.Printf("Bild %s auf %dx%d Pixel verkleinert (XMP-Daten erhalten)\n", 
+    // Erstelle neue Segmentliste
+    var newSegments []*jpegstructure.Segment
+    newSegments = append(newSegments, segments[:insertPos]...)
+    
+    // Füge EXIF zuerst ein
+    if exifSegment != nil {
+        newSegments = append(newSegments, exifSegment)
+    }
+    
+    // Dann XMP
+    if xmpSegment != nil {
+        newSegments = append(newSegments, xmpSegment)
+    }
+    
+    // Rest der Segmente anhängen
+    newSegments = append(newSegments, segments[insertPos:]...)
+    
+    newJpeg := jpegstructure.NewSegmentList(newSegments)
+
+    // Schreibe finale Datei
+    var buffer bytes.Buffer
+    if err := newJpeg.Write(&buffer); err != nil {
+        return fmt.Errorf("Fehler beim Serialisieren der JPEG-Daten: %v", err)
+    }
+
+    if err := os.WriteFile(jpgPath, buffer.Bytes(), 0644); err != nil {
+        return fmt.Errorf("Fehler beim Speichern der finalen JPEG: %v", err)
+    }
+
+    fmt.Printf("Bild %s auf %dx%d Pixel verkleinert (EXIF und XMP-Daten erhalten)\n", 
         jpgPath, newWidth, newHeight)
     return nil
 }
