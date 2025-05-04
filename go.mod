@@ -28,13 +28,3 @@ require (
 	golang.org/x/term v0.28.0 // indirect
 	gopkg.in/yaml.v2 v2.4.0 // indirect
 )
-
-// Lokale Module
-replace (
-	github.com/frommie/rawmanager/config => ./config
-	github.com/frommie/rawmanager/counter => ./counter
-	github.com/frommie/rawmanager/jpeg => ./jpeg
-	github.com/frommie/rawmanager/processor => ./processor
-	github.com/frommie/rawmanager/testutils => ./testutils
-	github.com/frommie/rawmanager/xmp => ./xmp
-)
