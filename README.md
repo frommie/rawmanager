@@ -44,7 +44,7 @@ Options:
 
 ## Configuration
 
-Create a `config.yaml` file to customize the behavior. The default config is as follows:
+Create a `config.yaml` file to customize the behavior. The [default config](config.yaml) is as follows:
 
 ```yaml
 # Rating Actions (0-5)
