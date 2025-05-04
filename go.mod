@@ -1,10 +1,14 @@
 module github.com/frommie/rawmanager
 
-go 1.21
+go 1.22
+
+toolchain go1.24.2
 
 require (
 	github.com/disintegration/imaging v1.6.2
 	github.com/dsoprea/go-jpeg-image-structure/v2 v2.0.0-20221012074422-4f3f7e934102
+	github.com/schollz/progressbar/v3 v3.18.0
+	gopkg.in/yaml.v3 v3.0.1
 )
 
 require (
@@ -16,15 +20,21 @@ require (
 	github.com/go-errors/errors v1.4.2 // indirect
 	github.com/go-xmlfmt/xmlfmt v0.0.0-20191208150333-d5b6f63a941b // indirect
 	github.com/golang/geo v0.0.0-20210211234256-740aa86cb551 // indirect
+	github.com/mitchellh/colorstring v0.0.0-20190213212951-d06e56a500db // indirect
+	github.com/rivo/uniseg v0.4.7 // indirect
 	golang.org/x/image v0.0.0-20191009234506-e7c1f5e7dbb8 // indirect
 	golang.org/x/net v0.0.0-20221002022538-bcab6841153b // indirect
+	golang.org/x/sys v0.29.0 // indirect
+	golang.org/x/term v0.28.0 // indirect
 	gopkg.in/yaml.v2 v2.4.0 // indirect
 )
 
 // Lokale Module
 replace (
-	github.com/frommie/rawmanager/constants => ./constants
+	github.com/frommie/rawmanager/config => ./config
+	github.com/frommie/rawmanager/counter => ./counter
 	github.com/frommie/rawmanager/jpeg => ./jpeg
 	github.com/frommie/rawmanager/processor => ./processor
-	github.com/frommie/rawmanager/types => ./types
+	github.com/frommie/rawmanager/testutils => ./testutils
+	github.com/frommie/rawmanager/xmp => ./xmp
 )

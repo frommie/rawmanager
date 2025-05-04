@@ -2,77 +2,66 @@ package jpeg
 
 import (
     "bytes"
-    "encoding/xml"
     "fmt"
     "os"
     "github.com/dsoprea/go-jpeg-image-structure/v2"
     "github.com/disintegration/imaging"
     "math"
-    "github.com/frommie/rawmanager/types"
-    "github.com/frommie/rawmanager/constants"
     "strings"
+    "github.com/frommie/rawmanager/config"
+    "github.com/frommie/rawmanager/xmp"
+    "path/filepath"
 )
 
-func GetRating(jpgPath string) (int, error) {
-    data, err := os.ReadFile(jpgPath)
-    if err != nil {
-        return 0, fmt.Errorf("Fehler beim Lesen der Datei: %v", err)
-    }
-
-    jmp := jpegstructure.NewJpegMediaParser()
-    intfc, err := jmp.ParseBytes(data)
-    if err != nil {
-        return 0, fmt.Errorf("Fehler beim Parsen der JPEG-Datei: %v", err)
-    }
-
-    sl := intfc.(*jpegstructure.SegmentList)
-    var xmpData []byte
-    for _, segment := range sl.Segments() {
-        if segment.MarkerId == constants.App1MarkerId {
-            payload := segment.Data
-            if bytes.HasPrefix(payload, []byte(constants.XmpNamespace)) {
-                cleanData := bytes.Map(func(r rune) rune {
-                    if r == 0 {
-                        return -1
-                    }
-                    return r
-                }, payload[len(constants.XmpNamespace):])
-                
-                xmpData = bytes.TrimSpace(cleanData)
-                break
-            }
-        }
-    }
-
-    if xmpData == nil {
-        return 0, fmt.Errorf("Keine XMP-Daten gefunden")
-    }
-
-    var xmp types.XmpMeta
-    if err := xml.Unmarshal(xmpData, &xmp); err != nil {
-        return 0, fmt.Errorf("Fehler beim Parsen der XMP-Daten: %v", err)
-    }
-
-    rating := 0
-    if xmp.RDF.Description.Rating != "" {
-        fmt.Sscanf(xmp.RDF.Description.Rating, "%d", &rating)
-    } else if xmp.RDF.Description.MSRating != "" {
-        var msRating int
-        fmt.Sscanf(xmp.RDF.Description.MSRating, "%d", &msRating)
-        rating = (msRating + 24) / 25
-    }
+const (
+    // XmpNamespace defines the namespace for Adobe XMP metadata
+    xmpNamespace = "http://ns.adobe.com/xap/1.0/"
     
-    return rating, nil
+    // app1MarkerId is the marker for APP1 segments in JPEG files (0xE1)
+    app1MarkerId = 0xE1
+)
+
+// GetRatingFromFile reads the rating from a JPEG file
+func GetRatingFromFile(jpgPath string, cfg *config.Config) (int, error) {
+    switch cfg.Xmp.Mode {
+    case config.XmpModeEmbedded:
+        // Read embedded XMP data from JPEG
+        file, err := os.Open(jpgPath)
+        if err != nil {
+            return 0, err
+        }
+        defer file.Close()
+
+        xmpData, err := xmp.ExtractXmpData(file)
+        if err != nil {
+            return 0, err
+        }
+
+        return xmp.GetRating(xmpData)
+
+    case config.XmpModeSeparate:
+        // Read separate .xmp file
+        xmpPath := jpgPath[:len(jpgPath)-len(filepath.Ext(jpgPath))] + ".xmp"
+        return xmp.GetRatingFromFile(xmpPath)
+
+    case config.XmpModeSeparateExt:
+        // Read .jpg.xmp file
+        xmpPath := jpgPath + ".xmp"
+        return xmp.GetRatingFromFile(xmpPath)
+
+    default:
+        return 0, fmt.Errorf("Invalid XMP mode: %s", cfg.Xmp.Mode)
+    }
 }
 
-func ResizeWithXMP(jpgPath string) error {
-    // Lese Original-Datei
+func ResizeWithXMP(jpgPath string, config *config.Config, verbose bool) error {
+    // Read original file
     data, err := os.ReadFile(jpgPath)
     if err != nil {
         return fmt.Errorf("Fehler beim Lesen der Datei: %v", err)
     }
 
-    // Extrahiere EXIF und XMP
+    // Extract EXIF and XMP
     jmp := jpegstructure.NewJpegMediaParser()
     intfc, err := jmp.ParseBytes(data)
     if err != nil {
@@ -81,22 +70,22 @@ func ResizeWithXMP(jpgPath string) error {
 
     sl := intfc.(*jpegstructure.SegmentList)
     
-    // Speichere EXIF-Segment
+    // Save EXIF segment
     var exifSegment *jpegstructure.Segment
     var xmpSegment *jpegstructure.Segment
     
     for _, segment := range sl.Segments() {
-        // XMP finden
-        if segment.MarkerId == constants.App1MarkerId && bytes.HasPrefix(segment.Data, []byte(constants.XmpNamespace)) {
+        // Find XMP
+        if segment.MarkerId == app1MarkerId && bytes.HasPrefix(segment.Data, []byte(xmpNamespace)) {
             xmpSegment = segment
         }
-        // EXIF finden (0xE1 ist der Marker für beide, EXIF und XMP)
-        if segment.MarkerId == constants.App1MarkerId && !bytes.HasPrefix(segment.Data, []byte(constants.XmpNamespace)) {
+        // Find EXIF (0xE1 is the marker for both EXIF and XMP)
+        if segment.MarkerId == app1MarkerId && !bytes.HasPrefix(segment.Data, []byte(xmpNamespace)) {
             exifSegment = segment
         }
     }
 
-    // Verkleinere das Bild
+    // Resize image
     img, err := imaging.Open(jpgPath)
     if err != nil {
         return fmt.Errorf("Fehler beim Öffnen des Bildes: %v", err)
@@ -107,24 +96,28 @@ func ResizeWithXMP(jpgPath string) error {
     currentHeight := bounds.Max.Y
     currentMP := float64(currentWidth * currentHeight) / 1000000.0
     
-    if currentMP <= constants.TargetMegapixels {
-        return nil // Bild ist bereits klein genug
+    if currentMP <= config.Process.TargetMegapixels {
+        if verbose {
+            fmt.Printf("Image %s is already small enough (%.1f MP)\n", 
+                jpgPath, currentMP)
+        }
+        return nil
     }
 
-    ratio := math.Sqrt(constants.TargetMegapixels / currentMP)
+    ratio := math.Sqrt(config.Process.TargetMegapixels / currentMP)
     newWidth := int(float64(currentWidth) * ratio)
     newHeight := int(float64(currentHeight) * ratio)
 
     resized := imaging.Resize(img, newWidth, newHeight, imaging.Lanczos)
 
-    // Speichere temporär das verkleinerte Bild
-    tempPath := strings.TrimSuffix(jpgPath, constants.JpegExtension) + "_temp.jpg"
-    if err := imaging.Save(resized, tempPath, imaging.JPEGQuality(constants.JpegQuality)); err != nil {
+    // Temporarily save resized image
+    tempPath := strings.TrimSuffix(jpgPath, config.Files.JpegExtension) + "_temp.jpg"
+    if err := imaging.Save(resized, tempPath, imaging.JPEGQuality(config.Process.JpegQuality)); err != nil {
         return fmt.Errorf("Fehler beim Speichern des temporären Bildes: %v", err)
     }
     defer os.Remove(tempPath)
 
-    // Lese temporäre Datei
+    // Read temporary file
     newData, err := os.ReadFile(tempPath)
     if err != nil {
         return fmt.Errorf("Fehler beim Lesen des temporären Bildes: %v", err)
@@ -138,7 +131,7 @@ func ResizeWithXMP(jpgPath string) error {
     newSl := newIntfc.(*jpegstructure.SegmentList)
     segments := newSl.Segments()
 
-    // Füge EXIF und XMP an der richtigen Position ein
+    // Insert EXIF and XMP at the correct position
     insertPos := 1
     for i, seg := range segments {
         if seg.MarkerId == 0xE0 { // APP0
@@ -147,26 +140,26 @@ func ResizeWithXMP(jpgPath string) error {
         }
     }
 
-    // Erstelle neue Segmentliste
+    // Create new segment list
     var newSegments []*jpegstructure.Segment
     newSegments = append(newSegments, segments[:insertPos]...)
     
-    // Füge EXIF zuerst ein
+    // Add EXIF first
     if exifSegment != nil {
         newSegments = append(newSegments, exifSegment)
     }
     
-    // Dann XMP
+    // Then XMP
     if xmpSegment != nil {
         newSegments = append(newSegments, xmpSegment)
     }
     
-    // Rest der Segmente anhängen
+    // Append remaining segments
     newSegments = append(newSegments, segments[insertPos:]...)
     
     newJpeg := jpegstructure.NewSegmentList(newSegments)
 
-    // Schreibe finale Datei
+    // Write final file
     var buffer bytes.Buffer
     if err := newJpeg.Write(&buffer); err != nil {
         return fmt.Errorf("Fehler beim Serialisieren der JPEG-Daten: %v", err)
@@ -176,7 +169,9 @@ func ResizeWithXMP(jpgPath string) error {
         return fmt.Errorf("Fehler beim Speichern der finalen JPEG: %v", err)
     }
 
-    fmt.Printf("Bild %s auf %dx%d Pixel verkleinert (EXIF und XMP-Daten erhalten)\n", 
-        jpgPath, newWidth, newHeight)
+    if verbose {
+        fmt.Printf("Image %s resized to %dx%d pixels (EXIF and XMP data preserved)\n", 
+            jpgPath, newWidth, newHeight)
+    }
     return nil
 }
