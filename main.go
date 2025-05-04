@@ -1,31 +1,55 @@
 package main
 
 import (
+    "flag"
     "log"
     "os"
+    "github.com/frommie/rawmanager/config"
     "github.com/frommie/rawmanager/processor"
 )
 
 func main() {
-    var photosDir string
+    var (
+        photosDir  string
+        configPath string
+        verbose    bool
+    )
     
-    // Prüfe ob ein Pfad als Parameter übergeben wurde
-    if len(os.Args) > 1 {
-        photosDir = os.Args[1]
+    flag.StringVar(&configPath, "config", "", "Path to YAML configuration file")
+    flag.BoolVar(&verbose, "v", false, "Verbose mode (shows detailed output)")
+    flag.Parse()
+
+    // Check if a path was passed as an argument
+    args := flag.Args()
+    if len(args) > 0 {
+        photosDir = args[0]
     } else {
-        // Verwende aktuelles Arbeitsverzeichnis wenn kein Parameter angegeben
         var err error
         photosDir, err = os.Getwd()
         if err != nil {
-            log.Fatal("Fehler beim Ermitteln des aktuellen Verzeichnisses:", err)
+            log.Fatal("Error determining current directory:", err)
         }
+    }
+    
+    // Load configuration
+    var cfg *config.Config
+    if configPath != "" {
+        var err error
+        cfg, err = config.LoadConfig(configPath)
+        if err != nil {
+            log.Fatal("Error loading configuration:", err)
+        }
+    } else {
+        cfg = config.NewDefaultConfig()
     }
     
     proc := &processor.ImageProcessor{
         RootDir: photosDir,
+        Config:  cfg,
+        Verbose: verbose,
     }
     
-    if err := proc.Walk(); err != nil {
+    if err := proc.Process(); err != nil {
         log.Fatal(err)
     }
 }

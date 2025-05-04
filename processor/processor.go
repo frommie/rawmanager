@@ -6,69 +6,143 @@ import (
     "os"
     "path/filepath"
     "strings"
+    "github.com/frommie/rawmanager/config"
     "github.com/frommie/rawmanager/jpeg"
-    "github.com/frommie/rawmanager/constants"
+    "github.com/schollz/progressbar/v3"
+    "github.com/frommie/rawmanager/counter"
 )
 
 type ImageProcessor struct {
-    RootDir string
+    RootDir  string
+    Config   *config.Config
+    Verbose  bool
+    counter  *counter.FileCounter
+    jpegBar  *progressbar.ProgressBar
+    rawBar   *progressbar.ProgressBar
+}
+
+func NewImageProcessor(rootDir string, cfg *config.Config, verbose bool) *ImageProcessor {
+    return &ImageProcessor{
+        RootDir: rootDir,
+        Config:  cfg,
+        Verbose: verbose,
+    }
+}
+
+// Helper method for output
+func (p *ImageProcessor) logf(format string, args ...interface{}) error {
+    if p.Verbose {
+        // Save position of both status bars
+        p.jpegBar.Clear()
+        p.rawBar.Clear()
+        // Print message
+        fmt.Printf(format, args...)
+        // Restore status bars
+        p.rawBar.RenderBlank()
+        p.jpegBar.RenderBlank()
+    }
+    // Return error with message
+    return fmt.Errorf(format, args...)
+}
+
+func (p *ImageProcessor) Process() error {
+    // Count files
+    p.counter = &counter.FileCounter{}
+    if err := p.counter.CountFiles(p.RootDir, p.Config); err != nil {
+        return err
+    }
+
+    // Initialize JPEG progress bar
+    p.jpegBar = progressbar.NewOptions(p.counter.JpegCount,
+        progressbar.OptionEnableColorCodes(true),
+        progressbar.OptionShowCount(),
+        progressbar.OptionSetDescription("[cyan][1/2]Processing JPEGs..."),
+        progressbar.OptionSetTheme(progressbar.Theme{
+            Saucer:        "[green]=[reset]",
+            SaucerHead:    "[green]>[reset]",
+            SaucerPadding: " ",
+            BarStart:      "[",
+            BarEnd:        "]",
+        }))
+
+    // Initialize RAW progress bar
+    p.rawBar = progressbar.NewOptions(p.counter.RawCount,
+        progressbar.OptionEnableColorCodes(true),
+        progressbar.OptionShowCount(),
+        progressbar.OptionSetDescription("[cyan][2/2]Processing RAWs... "),
+        progressbar.OptionSetTheme(progressbar.Theme{
+            Saucer:        "[yellow]=[reset]",
+            SaucerHead:    "[yellow]>[reset]",
+            SaucerPadding: " ",
+            BarStart:      "[",
+            BarEnd:        "]",
+        }))
+
+    // Start processing
+    if err := p.Walk(); err != nil {
+        return err
+    }
+
+    return nil
 }
 
 func (p *ImageProcessor) ProcessJPEG(jpgPath, rawPath string) error {
-    rating, err := jpeg.GetRating(jpgPath)
+    // Check if JPEG exists
+    if _, err := os.Stat(jpgPath); err != nil {
+        if errors.Is(err, os.ErrNotExist) {
+            // Apply NoJpegAction
+            if p.Config.NoJpegAction.DeleteRaw {
+                p.logf("Deleting %s (no corresponding JPG file found)\n", rawPath)
+                return os.Remove(rawPath)
+            }
+            return nil
+        }
+        return err
+    }
+
+    // Get rating from JPEG or XMP file
+    rating, err := jpeg.GetRatingFromFile(jpgPath, p.Config)
     if err != nil {
-        if os.IsNotExist(err) {
-            fmt.Printf("Info: JPEG nicht gefunden: %s\n", jpgPath)
-            return nil
-        }
-        fmt.Printf("Warnung: Konnte Bewertung für %s nicht lesen: %v\n", jpgPath, err)
-        return nil
+        return fmt.Errorf("Error reading rating: %v", err)
     }
 
-    // Prüfe ob RAW existiert bevor wir weitermachen
-    if _, err := os.Stat(rawPath); err != nil {
-        if os.IsNotExist(err) {
-            fmt.Printf("Info: RAW nicht gefunden: %s\n", rawPath)
-            return nil
-        }
-        fmt.Printf("Warnung: Fehler beim Zugriff auf RAW %s: %v\n", rawPath, err)
-        return nil
+    // Get configured actions for this rating
+    action, exists := p.Config.RatingActions[rating]
+    if !exists {
+        return p.logf("No action configured for rating %d", rating)
     }
 
-    switch rating {
-    case 1:
-        if err := p.handleRating1(jpgPath, rawPath); err != nil {
-            fmt.Printf("Warnung: Fehler bei Rating 1 Verarbeitung von %s: %v\n", jpgPath, err)
-            return nil
+    // Execute configured actions
+    if action.DeleteRaw {
+        p.logf("Deleting RAW %s (Rating %d)\n", rawPath, rating)
+        if err := p.deleteFile(rawPath); err != nil {
+            return err
         }
-    case 2:
-        if err := p.handleRating2(jpgPath, rawPath); err != nil {
-            fmt.Printf("Warnung: Fehler bei Rating 2 Verarbeitung von %s: %v\n", jpgPath, err)
-            return nil
+    }
+
+    if action.DeleteJpeg {
+        p.logf("Deleting JPEG %s (Rating %d)\n", jpgPath, rating)
+        if err := p.deleteFile(jpgPath); err != nil {
+            return err
+        }
+    }
+
+    if action.CompressJpeg {
+        p.logf("Compressing JPEG %s (Rating %d)\n", jpgPath, rating)
+        if err := jpeg.ResizeWithXMP(jpgPath, p.Config, p.Verbose); err != nil {
+            return err
         }
     }
 
     return nil
 }
 
-func (p *ImageProcessor) handleRating1(jpgPath, rawPath string) error {
-    // Logik für Rating 1
-    return p.deleteFiles(jpgPath, rawPath)
-}
-
-func (p *ImageProcessor) handleRating2(jpgPath, rawPath string) error {
-    if err := jpeg.ResizeWithXMP(jpgPath); err != nil {
-        return fmt.Errorf("Fehler beim Verkleinern von %s: %v", jpgPath, err)
-    }
-    return p.deleteFile(rawPath)
-}
-
 func (p *ImageProcessor) deleteFile(path string) error {
     if err := os.Remove(path); err != nil {
         if !errors.Is(err, os.ErrNotExist) {
-            return fmt.Errorf("Fehler beim Löschen von %s: %v", path, err)
+            return fmt.Errorf("Error deleting %s: %v", path, err)
         }
-        fmt.Printf("Warnung: %s wurde bereits gelöscht\n", path)
+        p.logf("Warning: %s has already been deleted\n", path)
     }
     return nil
 }
@@ -83,70 +157,72 @@ func (p *ImageProcessor) deleteFiles(paths ...string) error {
 }
 
 func (p *ImageProcessor) ProcessDirectory(rawDir string, parentDir string) error {
-    // Prüfe ob raw-Verzeichnis existiert
+    // Check if raw directory exists
     if _, err := os.Stat(rawDir); err != nil {
         if os.IsNotExist(err) {
-            fmt.Printf("Info: Überspringe nicht existierendes Verzeichnis: %s\n", rawDir)
+            p.logf("Info: Skipping non-existent directory: %s\n", rawDir)
             return nil
         }
-        return fmt.Errorf("Fehler beim Zugriff auf Verzeichnis %s: %v", rawDir, err)
+        return fmt.Errorf("Error accessing directory %s: %v", rawDir, err)
     }
 
-    // Zuerst: Prüfe alle JPEGs auf Bewertungen
+    // First: Check all JPEGs for ratings
     jpegFiles, err := os.ReadDir(parentDir)
     if err != nil {
         if os.IsNotExist(err) {
-            fmt.Printf("Info: Überspringe nicht existierendes Verzeichnis: %s\n", parentDir)
+            p.logf("Info: Skipping non-existent directory: %s\n", parentDir)
             return nil
         }
-        return fmt.Errorf("Fehler beim Lesen des JPEG-Verzeichnisses %s: %v", parentDir, err)
+        return fmt.Errorf("Error reading JPEG directory %s: %v", parentDir, err)
     }
 
-    // Verarbeite JPEGs basierend auf Bewertungen
+    // Process JPEGs based on ratings
     for _, file := range jpegFiles {
-        if !file.IsDir() && strings.HasSuffix(strings.ToUpper(file.Name()), constants.JpegExtension) {
+        if !file.IsDir() && strings.HasSuffix(strings.ToUpper(file.Name()), p.Config.Files.JpegExtension) {
+            p.jpegBar.Add(1)  // Update JPEG bar
             jpgPath := filepath.Join(parentDir, file.Name())
-            rawName := file.Name()[:len(file.Name())-len(constants.JpegExtension)] + constants.RawExtension
+            rawName := file.Name()[:len(file.Name())-len(p.Config.Files.JpegExtension)] + p.Config.Files.RawExtension
             rawPath := filepath.Join(rawDir, rawName)
 
             if _, err := os.Stat(rawPath); err != nil && os.IsNotExist(err) {
-                fmt.Printf("Info: Keine RAW-Datei gefunden für: %s\n", jpgPath)
+                p.logf("Info: No RAW file found for: %s\n", jpgPath)
                 continue
             }
 
             if err := p.ProcessJPEG(jpgPath, rawPath); err != nil {
-                fmt.Printf("Warnung: Fehler bei der Verarbeitung von %s: %v\n", jpgPath, err)
+                p.logf("Warning: Error when processing %s: %v\n", jpgPath, err)
                 continue
             }
         }
     }
 
-    // Danach: Prüfe alle RAWs ohne zugehöriges JPEG
+    // Then: Check all RAWs without corresponding JPEG
     rawFiles, err := os.ReadDir(rawDir)
     if err != nil {
         if os.IsNotExist(err) {
-            fmt.Printf("Info: Überspringe nicht existierendes Verzeichnis: %s\n", rawDir)
+            p.logf("Info: Skipping non-existent directory: %s\n", rawDir)
             return nil
         }
-        return fmt.Errorf("Fehler beim Lesen des RAW-Verzeichnisses %s: %v", rawDir, err)
+        return fmt.Errorf("Error reading RAW directory %s: %v", rawDir, err)
     }
 
     for _, file := range rawFiles {
-        if !file.IsDir() && strings.HasSuffix(strings.ToUpper(file.Name()), constants.RawExtension) {
+        if !file.IsDir() && strings.HasSuffix(strings.ToUpper(file.Name()), p.Config.Files.RawExtension) {
+            p.rawBar.Add(1)
             rawPath := filepath.Join(rawDir, file.Name())
-            jpgName := file.Name()[:len(file.Name())-len(constants.RawExtension)] + constants.JpegExtension
+            jpgName := file.Name()[:len(file.Name())-len(p.Config.Files.RawExtension)] + p.Config.Files.JpegExtension
             jpgPath := filepath.Join(parentDir, jpgName)
 
-            // Prüfe ob JPEG existiert
+            // Check if JPEG exists
             if _, err := os.Stat(jpgPath); err != nil {
                 if os.IsNotExist(err) {
                     if err := p.deleteFile(rawPath); err != nil {
-                        fmt.Printf("Warnung: Fehler beim Löschen von %s: %v\n", rawPath, err)
+                        p.logf("Warning: Error when deleting %s: %v\n", rawPath, err)
                         continue
                     }
-                    fmt.Printf("Info: RAW-Datei gelöscht (keine JPG gefunden): %s\n", rawPath)
+                    p.logf("Info: RAW file deleted (no JPG found): %s\n", rawPath)
                 } else {
-                    fmt.Printf("Warnung: Fehler beim Prüfen von %s: %v\n", jpgPath, err)
+                    p.logf("Warning: Error when checking %s: %v\n", jpgPath, err)
                     continue
                 }
             }
@@ -160,17 +236,28 @@ func (p *ImageProcessor) Walk() error {
     return filepath.Walk(p.RootDir, func(path string, info os.FileInfo, err error) error {
         if err != nil {
             if os.IsNotExist(err) {
-                fmt.Printf("Info: Überspringe nicht existierenden Pfad: %s\n", path)
+                p.logf("Info: Skip non-existing path: %s\n", path)
                 return nil
             }
-            fmt.Printf("Warnung: Fehler beim Zugriff auf %s: %v\n", path, err)
+            p.logf("Warning: Error accessing %s: %v\n", path, err)
             return nil
         }
-        if info.IsDir() && info.Name() == "raw" {
+
+        // If RAWs are in same directory, process each directory
+        if p.Config.Files.SameDir {
+            if info.IsDir() && !strings.HasPrefix(info.Name(), ".") {
+                if err := p.ProcessDirectory(path, path); err != nil {
+                    p.logf("Warning: Error processing %s: %v\n", path, err)
+                }
+            }
+            return nil
+        }
+
+        // Otherwise only process RAW subdirectories
+        if info.IsDir() && info.Name() == p.Config.Files.RawFolder {
             parentDir := filepath.Dir(path)
             if err := p.ProcessDirectory(path, parentDir); err != nil {
-                fmt.Printf("Warnung: Fehler bei der Verarbeitung von %s: %v\n", path, err)
-                return nil // Weitermachen statt abbrechen
+                p.logf("Warning: Error processing %s: %v\n", path, err)
             }
         }
         return nil

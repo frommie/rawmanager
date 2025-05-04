@@ -1,0 +1,48 @@
+# Rating Actions (0-5)
+ratingActions:
+  1:
+    deleteRaw: true
+    deleteJpeg: true
+    compressJpeg: false
+  2:
+    deleteRaw: true
+    deleteJpeg: false
+    compressJpeg: true
+  3:
+    deleteRaw: false
+    deleteJpeg: false
+    compressJpeg: false
+  4:
+    deleteRaw: false
+    deleteJpeg: false
+    compressJpeg: false
+  5:
+    deleteRaw: false
+    deleteJpeg: false
+    compressJpeg: false
+
+# Action when no JPEG is found
+noJpegAction:
+  deleteRaw: true
+  deleteJpeg: false
+  compressJpeg: false
+
+# XMP Configuration
+xmp:
+  # Possible values:
+  # - embedded: XMP embedded in JPEG
+  # - separate: separate .xmp file (DSCF6482.xmp)
+  # - separate_ext: separate .JPG.xmp file (DSCF6482.JPG.xmp)
+  mode: embedded
+
+# File Configuration
+files:
+  rawExtension: ".RAF"
+  jpegExtension: ".JPG"
+  rawFolder: "raw"
+  sameDir: false
+
+# Image Processing Configuration
+process:
+  targetMegapixels: 10.0
+  jpegQuality: 95
