@@ -156,80 +156,114 @@ func (p *ImageProcessor) deleteFiles(paths ...string) error {
 	return nil
 }
 
+// ProcessDirectory only coordinates the process
 func (p *ImageProcessor) ProcessDirectory(rawDir string, parentDir string) error {
-	// Check if raw directory exists
-	if _, err := os.Stat(rawDir); err != nil {
-		if os.IsNotExist(err) {
-			p.logf("Info: Skipping non-existent directory: %s\n", rawDir)
-			return nil
-		}
-		return fmt.Errorf("Error accessing directory %s: %v", rawDir, err)
-	}
+    if err := p.validateDirectories(rawDir, parentDir); err != nil {
+        return err
+    }
 
-	// First: Check all JPEGs for ratings
-	jpegFiles, err := os.ReadDir(parentDir)
-	if err != nil {
-		if os.IsNotExist(err) {
-			p.logf("Info: Skipping non-existent directory: %s\n", parentDir)
-			return nil
-		}
-		return fmt.Errorf("Error reading JPEG directory %s: %v", parentDir, err)
-	}
+    if err := p.processJpegFiles(rawDir, parentDir); err != nil {
+        return err
+    }
 
-	// Process JPEGs based on ratings
-	for _, file := range jpegFiles {
-		if !file.IsDir() && strings.HasSuffix(strings.ToUpper(file.Name()), p.Config.Files.JpegExtension) {
-			p.jpegBar.Add(1) // Update JPEG bar
-			jpgPath := filepath.Join(parentDir, file.Name())
-			rawName := file.Name()[:len(file.Name())-len(p.Config.Files.JpegExtension)] + p.Config.Files.RawExtension
-			rawPath := filepath.Join(rawDir, rawName)
+    if err := p.processRawFiles(rawDir, parentDir); err != nil {
+        return err
+    }
 
-			if _, err := os.Stat(rawPath); err != nil && os.IsNotExist(err) {
-				p.logf("Info: No RAW file found for: %s\n", jpgPath)
-				continue
-			}
+    return nil
+}
 
-			if err := p.ProcessJPEG(jpgPath, rawPath); err != nil {
-				p.logf("Warning: Error when processing %s: %v\n", jpgPath, err)
-				continue
-			}
-		}
-	}
+// 	Help function for validating the directories
+func (p *ImageProcessor) validateDirectories(rawDir string, parentDir string) error {
+    if _, err := os.Stat(rawDir); err != nil {
+        if os.IsNotExist(err) {
+            p.logf("Info: Skipping non-existent directory: %s\n", rawDir)
+            return nil
+        }
+        return fmt.Errorf("Error accessing directory %s: %v", rawDir, err)
+    }
+    return nil
+}
 
-	// Then: Check all RAWs without corresponding JPEG
-	rawFiles, err := os.ReadDir(rawDir)
-	if err != nil {
-		if os.IsNotExist(err) {
-			p.logf("Info: Skipping non-existent directory: %s\n", rawDir)
-			return nil
-		}
-		return fmt.Errorf("Error reading RAW directory %s: %v", rawDir, err)
-	}
+// Processing JPEG files
+func (p *ImageProcessor) processJpegFiles(rawDir string, parentDir string) error {
+    jpegFiles, err := os.ReadDir(parentDir)
+    if err != nil {
+        if os.IsNotExist(err) {
+            p.logf("Info: Skipping non-existent directory: %s\n", parentDir)
+            return nil
+        }
+        return fmt.Errorf("Error reading JPEG directory %s: %v", parentDir, err)
+    }
 
-	for _, file := range rawFiles {
-		if !file.IsDir() && strings.HasSuffix(strings.ToUpper(file.Name()), p.Config.Files.RawExtension) {
-			p.rawBar.Add(1)
-			rawPath := filepath.Join(rawDir, file.Name())
-			jpgName := file.Name()[:len(file.Name())-len(p.Config.Files.RawExtension)] + p.Config.Files.JpegExtension
-			jpgPath := filepath.Join(parentDir, jpgName)
+    for _, file := range jpegFiles {
+        if err := p.processJpegFile(file, rawDir, parentDir); err != nil {
+            p.logf("Warning: %v\n", err)
+            continue
+        }
+    }
+    return nil
+}
 
-			// Check if JPEG exists
-			if _, err := os.Stat(jpgPath); err != nil {
-				if os.IsNotExist(err) {
-					if err := p.deleteFile(rawPath); err != nil {
-						p.logf("Warning: Error when deleting %s: %v\n", rawPath, err)
-						continue
-					}
-					p.logf("Info: RAW file deleted (no JPG found): %s\n", rawPath)
-				} else {
-					p.logf("Warning: Error when checking %s: %v\n", jpgPath, err)
-					continue
-				}
-			}
-		}
-	}
+// Processing of single JPEG file
+func (p *ImageProcessor) processJpegFile(file os.DirEntry, rawDir string, parentDir string) error {
+    if !file.IsDir() && strings.HasSuffix(strings.ToUpper(file.Name()), p.Config.Files.JpegExtension) {
+        p.jpegBar.Add(1)
+        jpgPath := filepath.Join(parentDir, file.Name())
+        rawName := file.Name()[:len(file.Name())-len(p.Config.Files.JpegExtension)] + p.Config.Files.RawExtension
+        rawPath := filepath.Join(rawDir, rawName)
 
-	return nil
+        if _, err := os.Stat(rawPath); err != nil && os.IsNotExist(err) {
+            return fmt.Errorf("No RAW file found for: %s", jpgPath)
+        }
+
+        if err := p.ProcessJPEG(jpgPath, rawPath); err != nil {
+            return fmt.Errorf("Error when processing %s: %v", jpgPath, err)
+        }
+    }
+    return nil
+}
+
+// Processing RAW files
+func (p *ImageProcessor) processRawFiles(rawDir string, parentDir string) error {
+    rawFiles, err := os.ReadDir(rawDir)
+    if err != nil {
+        if os.IsNotExist(err) {
+            p.logf("Info: Skipping non-existent directory: %s\n", rawDir)
+            return nil
+        }
+        return fmt.Errorf("Error reading RAW directory %s: %v", rawDir, err)
+    }
+
+    for _, file := range rawFiles {
+        if err := p.processRawFile(file, rawDir, parentDir); err != nil {
+            p.logf("Warning: %v\n", err)
+            continue
+        }
+    }
+    return nil
+}
+
+// Processing of single RAW file
+func (p *ImageProcessor) processRawFile(file os.DirEntry, rawDir string, parentDir string) error {
+    if !file.IsDir() && strings.HasSuffix(strings.ToUpper(file.Name()), p.Config.Files.RawExtension) {
+        p.rawBar.Add(1)
+        rawPath := filepath.Join(rawDir, file.Name())
+        jpgName := file.Name()[:len(file.Name())-len(p.Config.Files.RawExtension)] + p.Config.Files.JpegExtension
+        jpgPath := filepath.Join(parentDir, jpgName)
+
+        if _, err := os.Stat(jpgPath); err != nil {
+            if os.IsNotExist(err) {
+                if err := p.deleteFile(rawPath); err != nil {
+                    return fmt.Errorf("Error when deleting %s: %v", rawPath, err)
+                }
+                p.logf("Info: RAW file deleted (no JPG found): %s\n", rawPath)
+            } else {
+                return fmt.Errorf("Error when checking %s: %v", jpgPath, err)
+            }
+        }
+    }
+    return nil
 }
 
 func (p *ImageProcessor) Walk() error {
