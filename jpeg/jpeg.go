@@ -67,7 +67,7 @@ func ResizeWithXMP(jpgPath string, config *config.Config, verbose bool) error {
 	if err != nil {
 		return err
 	}
-	
+
 	// If no resize was needed, return early
 	if newWidth == 0 && newHeight == 0 {
 		return nil
@@ -152,7 +152,7 @@ func resizeImage(jpgPath string, config *config.Config, verbose bool) (int, int,
 // combineImageAndMetadata combines the resized image with the original metadata
 func combineImageAndMetadata(jpgPath string, exifSegment, xmpSegment *jpegstructure.Segment, config *config.Config) error {
 	tempPath := strings.TrimSuffix(jpgPath, config.Files.JpegExtension) + "_temp.jpg"
-	
+
 	// Read temporary file
 	newData, err := os.ReadFile(tempPath)
 	if err != nil {
