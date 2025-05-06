@@ -57,7 +57,7 @@ func (c *Config) Validate() error {
 		XmpModeSeparateExt: true,
 	}
 	if !validModes[c.Xmp.Mode] {
-		return fmt.Errorf("ungültiger XMP-Mode: %s", c.Xmp.Mode)
+		return fmt.Errorf("Invalid XMP-Mode: %s", c.Xmp.Mode)
 	}
 	return nil
 }
@@ -66,12 +66,12 @@ func (c *Config) Validate() error {
 func LoadConfig(path string) (*Config, error) {
 	data, err := os.ReadFile(path)
 	if err != nil {
-		return nil, fmt.Errorf("Fehler beim Lesen der Konfigurationsdatei: %v", err)
+		return nil, fmt.Errorf("Error reading config file:: %v", err)
 	}
 
 	var cfg Config
 	if err := yaml.Unmarshal(data, &cfg); err != nil {
-		return nil, fmt.Errorf("Fehler beim Parsen der YAML-Konfiguration: %v", err)
+		return nil, fmt.Errorf("Efrror parsing YAML-config: %v", err)
 	}
 
 	// Validate config
