@@ -3,6 +3,7 @@ package config
 import (
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 )
 
@@ -125,5 +126,20 @@ func TestFileConfig_IgnoresExtensionCase(t *testing.T) {
 		if files.IsJpeg(name) {
 			t.Errorf("IsJpeg(%q) = true, want false", name)
 		}
+	}
+}
+
+func TestLoadConfig_RejectsDeleteJpegWithoutDeleteRaw(t *testing.T) {
+	_, err := LoadConfig(writeConfig(t, `
+ratingActions:
+  1:
+    deleteRaw: false
+    deleteJpeg: true
+`))
+	if err == nil {
+		t.Fatal("LoadConfig() error = nil, want error")
+	}
+	if !strings.Contains(err.Error(), "rating 1") {
+		t.Errorf("LoadConfig() error = %q, want it to name rating 1", err)
 	}
 }

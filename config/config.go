@@ -3,6 +3,7 @@ package config
 import (
 	"fmt"
 	"os"
+	"sort"
 	"strings"
 
 	"gopkg.in/yaml.v3"
@@ -82,6 +83,18 @@ func (c *Config) Validate() error {
 	}
 	if c.Files.JpegExtension == "" {
 		return fmt.Errorf("JPEG extension must not be empty")
+	}
+
+	// Deleting the JPEG implies deleting the RAW; otherwise the remaining RAW would be handled by the NoJpegAction
+	ratings := make([]int, 0, len(c.RatingActions))
+	for rating := range c.RatingActions {
+		ratings = append(ratings, rating)
+	}
+	sort.Ints(ratings)
+	for _, rating := range ratings {
+		if action := c.RatingActions[rating]; action.DeleteJpeg && !action.DeleteRaw {
+			return fmt.Errorf("invalid action for rating %d: deleteJpeg requires deleteRaw", rating)
+		}
 	}
 	return nil
 }
