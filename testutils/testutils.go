@@ -45,6 +45,13 @@ func CreateTestJPEGWithEmbeddedXMP(t *testing.T, path string, rating int) error 
 		return fmt.Errorf("Error creating JPEG: %v", err)
 	}
 
+	return EmbedXMP(t, path, rating)
+}
+
+// EmbedXMP inserts an APP1 segment with XMP rating data into an existing JPEG file.
+func EmbedXMP(t *testing.T, path string, rating int) error {
+	t.Helper()
+
 	// Prepare XMP data
 	xmpData := fmt.Sprintf(`<?xpacket begin="" id="W5M0MpCehiHzreSzNTczkc9d"?>
 <x:xmpmeta xmlns:x="adobe:ns:meta/">

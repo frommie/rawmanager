@@ -10,7 +10,6 @@ import (
 	"math"
 	"os"
 	"path/filepath"
-	"strings"
 )
 
 const (
@@ -63,18 +62,18 @@ func ResizeWithXMP(jpgPath string, config *config.Config, verbose bool) error {
 	}
 
 	// Process and resize the image
-	newWidth, newHeight, err := resizeImage(jpgPath, config, verbose)
+	resizedData, newWidth, newHeight, err := resizeImage(jpgPath, config, verbose)
 	if err != nil {
 		return err
 	}
 
 	// If no resize was needed, return early
-	if newWidth == 0 && newHeight == 0 {
+	if resizedData == nil {
 		return nil
 	}
 
 	// Combine resized image with original metadata
-	if err := combineImageAndMetadata(jpgPath, exifSegment, xmpSegment, config); err != nil {
+	if err := combineImageAndMetadata(jpgPath, resizedData, exifSegment, xmpSegment); err != nil {
 		return err
 	}
 
@@ -114,11 +113,12 @@ func extractMetadata(jpgPath string) (*jpegstructure.Segment, *jpegstructure.Seg
 	return exifSegment, xmpSegment, nil
 }
 
-// resizeImage performs the actual image resizing if needed
-func resizeImage(jpgPath string, config *config.Config, verbose bool) (int, int, error) {
+// resizeImage performs the actual image resizing if needed and returns the encoded JPEG data.
+// It returns nil data if the image is already small enough.
+func resizeImage(jpgPath string, config *config.Config, verbose bool) ([]byte, int, int, error) {
 	img, err := imaging.Open(jpgPath)
 	if err != nil {
-		return 0, 0, fmt.Errorf("error opening image: %v", err)
+		return nil, 0, 0, fmt.Errorf("error opening image: %v", err)
 	}
 
 	bounds := img.Bounds()
@@ -131,7 +131,7 @@ func resizeImage(jpgPath string, config *config.Config, verbose bool) (int, int,
 			fmt.Printf("Image %s is already small enough (%.1f MP)\n",
 				jpgPath, currentMP)
 		}
-		return 0, 0, nil
+		return nil, 0, 0, nil
 	}
 
 	ratio := math.Sqrt(config.Process.TargetMegapixels / currentMP)
@@ -140,29 +140,20 @@ func resizeImage(jpgPath string, config *config.Config, verbose bool) (int, int,
 
 	resized := imaging.Resize(img, newWidth, newHeight, imaging.Lanczos)
 
-	tempPath := strings.TrimSuffix(jpgPath, config.Files.JpegExtension) + "_temp.jpg"
-	if err := imaging.Save(resized, tempPath, imaging.JPEGQuality(config.Process.JpegQuality)); err != nil {
-		return 0, 0, fmt.Errorf("error saving temporary image: %v", err)
+	var buffer bytes.Buffer
+	if err := imaging.Encode(&buffer, resized, imaging.JPEG, imaging.JPEGQuality(config.Process.JpegQuality)); err != nil {
+		return nil, 0, 0, fmt.Errorf("error encoding resized image: %v", err)
 	}
-	defer os.Remove(tempPath)
 
-	return newWidth, newHeight, nil
+	return buffer.Bytes(), newWidth, newHeight, nil
 }
 
 // combineImageAndMetadata combines the resized image with the original metadata
-func combineImageAndMetadata(jpgPath string, exifSegment, xmpSegment *jpegstructure.Segment, config *config.Config) error {
-	tempPath := strings.TrimSuffix(jpgPath, config.Files.JpegExtension) + "_temp.jpg"
-
-	// Read temporary file
-	newData, err := os.ReadFile(tempPath)
-	if err != nil {
-		return fmt.Errorf("error reading temporary image: %v", err)
-	}
-
+func combineImageAndMetadata(jpgPath string, newData []byte, exifSegment, xmpSegment *jpegstructure.Segment) error {
 	jmp := jpegstructure.NewJpegMediaParser()
 	newIntfc, err := jmp.ParseBytes(newData)
 	if err != nil {
-		return fmt.Errorf("error parsing temporary image: %v", err)
+		return fmt.Errorf("error parsing resized image: %v", err)
 	}
 
 	newSl := newIntfc.(*jpegstructure.SegmentList)

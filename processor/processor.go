@@ -207,11 +207,10 @@ func (p *ImageProcessor) processJpegFiles(rawDir string, parentDir string) error
 
 // Processing of single JPEG file
 func (p *ImageProcessor) processJpegFile(file os.DirEntry, rawDir string, parentDir string) error {
-	if !file.IsDir() && strings.HasSuffix(strings.ToUpper(file.Name()), p.Config.Files.JpegExtension) {
+	if !file.IsDir() && p.Config.Files.IsJpeg(file.Name()) {
 		p.jpegBar.Add(1)
 		jpgPath := filepath.Join(parentDir, file.Name())
-		rawName := file.Name()[:len(file.Name())-len(p.Config.Files.JpegExtension)] + p.Config.Files.RawExtension
-		rawPath := filepath.Join(rawDir, rawName)
+		rawPath := counterpartPath(rawDir, file.Name(), p.Config.Files.JpegExtension, p.Config.Files.RawExtension)
 
 		if _, err := os.Stat(rawPath); err != nil && os.IsNotExist(err) {
 			return fmt.Errorf("No RAW file found for: %s", jpgPath)
@@ -246,14 +245,16 @@ func (p *ImageProcessor) processRawFiles(rawDir string, parentDir string) error 
 
 // Processing of single RAW file
 func (p *ImageProcessor) processRawFile(file os.DirEntry, rawDir string, parentDir string) error {
-	if !file.IsDir() && strings.HasSuffix(strings.ToUpper(file.Name()), p.Config.Files.RawExtension) {
+	if !file.IsDir() && p.Config.Files.IsRaw(file.Name()) {
 		p.rawBar.Add(1)
 		rawPath := filepath.Join(rawDir, file.Name())
-		jpgName := file.Name()[:len(file.Name())-len(p.Config.Files.RawExtension)] + p.Config.Files.JpegExtension
-		jpgPath := filepath.Join(parentDir, jpgName)
+		jpgPath := counterpartPath(parentDir, file.Name(), p.Config.Files.RawExtension, p.Config.Files.JpegExtension)
 
 		if _, err := os.Stat(jpgPath); err != nil {
 			if os.IsNotExist(err) {
+				if !p.Config.NoJpegAction.DeleteRaw {
+					return nil
+				}
 				if err := p.deleteFile(rawPath); err != nil {
 					return fmt.Errorf("Error when deleting %s: %v", rawPath, err)
 				}
@@ -264,6 +265,20 @@ func (p *ImageProcessor) processRawFile(file os.DirEntry, rawDir string, parentD
 		}
 	}
 	return nil
+}
+
+// counterpartPath returns the path of the file in dir that belongs to name, with ext replaced by
+// otherExt. As file systems can be case-sensitive, the configured, upper and lower case variants
+// of otherExt are tried. If none exists, the path with the configured extension is returned.
+func counterpartPath(dir, name, ext, otherExt string) string {
+	base := name[:len(name)-len(ext)]
+	for _, candidateExt := range []string{otherExt, strings.ToUpper(otherExt), strings.ToLower(otherExt)} {
+		candidate := filepath.Join(dir, base+candidateExt)
+		if _, err := os.Stat(candidate); err == nil {
+			return candidate
+		}
+	}
+	return filepath.Join(dir, base+otherExt)
 }
 
 func (p *ImageProcessor) Walk() error {

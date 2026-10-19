@@ -83,3 +83,24 @@ func TestFileCounter_CountFiles(t *testing.T) {
 		})
 	}
 }
+
+func TestFileCounter_CountFiles_IgnoresExtensionCase(t *testing.T) {
+	tmpDir := t.TempDir()
+	for _, name := range []string{"a.JPG", "b.jpg", "a.RAF", "b.raf"} {
+		if err := os.WriteFile(filepath.Join(tmpDir, name), []byte{}, 0644); err != nil {
+			t.Fatalf("Setup failed: %v", err)
+		}
+	}
+
+	cfg := config.NewDefaultConfig()
+	cfg.Files.JpegExtension = ".jpg"
+	cfg.Files.RawExtension = ".raf"
+
+	c := &FileCounter{}
+	if err := c.CountFiles(tmpDir, cfg); err != nil {
+		t.Fatalf("CountFiles() error = %v", err)
+	}
+	if c.JpegCount != 2 || c.RawCount != 2 {
+		t.Errorf("CountFiles() = %d JPEGs, %d RAWs, want 2, 2", c.JpegCount, c.RawCount)
+	}
+}

@@ -92,6 +92,48 @@ func TestResizeWithXMP(t *testing.T) {
 	}
 }
 
+func TestResizeWithXMP_DownsizesLargeImage(t *testing.T) {
+	tmpDir := t.TempDir()
+	jpgPath := filepath.Join(tmpDir, "large.jpg")
+
+	// 2000x1500 = 3 MP, target is 1 MP
+	img := imaging.New(2000, 1500, color.White)
+	if err := imaging.Save(img, jpgPath); err != nil {
+		t.Fatalf("Setup failed: %v", err)
+	}
+	if err := testutils.EmbedXMP(t, jpgPath, 2); err != nil {
+		t.Fatalf("Setup failed: %v", err)
+	}
+
+	cfg := config.NewDefaultConfig()
+	cfg.Process.TargetMegapixels = 1.0
+
+	if err := ResizeWithXMP(jpgPath, cfg, false); err != nil {
+		t.Fatalf("ResizeWithXMP() error = %v", err)
+	}
+
+	resized, err := imaging.Open(jpgPath)
+	if err != nil {
+		t.Fatalf("Failed to open resized image: %v", err)
+	}
+	if w, h := resized.Bounds().Dx(), resized.Bounds().Dy(); w*h > 1000000 {
+		t.Errorf("Image not downsized: %dx%d", w, h)
+	}
+
+	rating, err := GetRatingFromFile(jpgPath, cfg)
+	if err != nil {
+		t.Fatalf("XMP not preserved: %v", err)
+	}
+	if rating != 2 {
+		t.Errorf("Rating after resize = %d, want 2", rating)
+	}
+
+	entries, _ := os.ReadDir(tmpDir)
+	if len(entries) != 1 {
+		t.Errorf("Expected only the resized image in directory, got %d entries", len(entries))
+	}
+}
+
 // Help functions for tests
 func createEmptyJPEG(path string) error {
 	img := imaging.New(100, 100, color.White)

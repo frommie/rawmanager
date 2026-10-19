@@ -177,6 +177,68 @@ func TestImageProcessor_Process(t *testing.T) {
 	}
 }
 
+func TestProcess_NoJpegAction(t *testing.T) {
+	tests := []struct {
+		name       string
+		deleteRaw  bool
+		wantRawDel bool
+	}{
+		{"Orphaned RAW is deleted when configured", true, true},
+		{"Orphaned RAW is kept when configured", false, false},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			tmpDir := t.TempDir()
+			rawPath := filepath.Join(tmpDir, "raw", "orphan.RAF")
+			if err := os.MkdirAll(filepath.Dir(rawPath), 0755); err != nil {
+				t.Fatalf("Setup failed: %v", err)
+			}
+			if err := os.WriteFile(rawPath, []byte("RAW"), 0644); err != nil {
+				t.Fatalf("Setup failed: %v", err)
+			}
+
+			cfg := config.NewDefaultConfig()
+			cfg.NoJpegAction.DeleteRaw = tt.deleteRaw
+
+			proc := NewImageProcessor(tmpDir, cfg, false)
+			if err := proc.Process(); err != nil {
+				t.Fatalf("Process() error = %v", err)
+			}
+
+			if exists := checkFileExists(t, rawPath); exists != !tt.wantRawDel {
+				t.Errorf("RAW file exists = %v, want %v", exists, !tt.wantRawDel)
+			}
+		})
+	}
+}
+
+func TestProcess_IgnoresExtensionCase(t *testing.T) {
+	tmpDir := t.TempDir()
+	jpgPath := filepath.Join(tmpDir, "test.JPG")
+	rawPath := filepath.Join(tmpDir, "raw", "test.RAF")
+	if err := createTestFiles(t, jpgPath, rawPath, 1); err != nil {
+		t.Fatalf("Setup failed: %v", err)
+	}
+
+	cfg := config.NewDefaultConfig()
+	cfg.Files.JpegExtension = ".jpg"
+	cfg.Files.RawExtension = ".raf"
+
+	proc := NewImageProcessor(tmpDir, cfg, false)
+	if err := proc.Process(); err != nil {
+		t.Fatalf("Process() error = %v", err)
+	}
+
+	// Rating 1 deletes both files
+	if checkFileExists(t, jpgPath) {
+		t.Errorf("JPEG file still exists, want deleted")
+	}
+	if checkFileExists(t, rawPath) {
+		t.Errorf("RAW file still exists, want deleted")
+	}
+}
+
 func TestProgressBars(t *testing.T) {
 	// Setup: Create temporary test directory
 	tmpDir := t.TempDir()

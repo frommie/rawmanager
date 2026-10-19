@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"gopkg.in/yaml.v3"
 	"os"
+	"strings"
 )
 
 type XmpMode string
@@ -36,6 +37,20 @@ type FileConfig struct {
 	SameDir       bool   `yaml:"sameDir"`       // true if RAWs are in same directory
 }
 
+// IsJpeg reports whether the file name has the configured JPEG extension (case-insensitive)
+func (f FileConfig) IsJpeg(name string) bool {
+	return hasExtension(name, f.JpegExtension)
+}
+
+// IsRaw reports whether the file name has the configured RAW extension (case-insensitive)
+func (f FileConfig) IsRaw(name string) bool {
+	return hasExtension(name, f.RawExtension)
+}
+
+func hasExtension(name, ext string) bool {
+	return len(name) >= len(ext) && strings.EqualFold(name[len(name)-len(ext):], ext)
+}
+
 type ProcessConfig struct {
 	TargetMegapixels float64 `yaml:"targetMegapixels"` // Target size for JPEG compression
 	JpegQuality      int     `yaml:"jpegQuality"`      // JPEG quality (0-100)
@@ -59,6 +74,14 @@ func (c *Config) Validate() error {
 	if !validModes[c.Xmp.Mode] {
 		return fmt.Errorf("Invalid XMP-Mode: %s", c.Xmp.Mode)
 	}
+
+	// An empty extension would match every file and could delete unrelated files
+	if c.Files.RawExtension == "" {
+		return fmt.Errorf("RAW extension must not be empty")
+	}
+	if c.Files.JpegExtension == "" {
+		return fmt.Errorf("JPEG extension must not be empty")
+	}
 	return nil
 }
 
@@ -69,9 +92,16 @@ func LoadConfig(path string) (*Config, error) {
 		return nil, fmt.Errorf("Error reading config file:: %v", err)
 	}
 
-	var cfg Config
+	// Start from defaults so that omitted values keep sensible settings
+	cfg := *NewDefaultConfig()
+	// Configured rating actions replace the defaults instead of being merged with them
+	defaultRatingActions := cfg.RatingActions
+	cfg.RatingActions = nil
 	if err := yaml.Unmarshal(data, &cfg); err != nil {
-		return nil, fmt.Errorf("Efrror parsing YAML-config: %v", err)
+		return nil, fmt.Errorf("Error parsing YAML-config: %v", err)
+	}
+	if cfg.RatingActions == nil {
+		cfg.RatingActions = defaultRatingActions
 	}
 
 	// Validate config

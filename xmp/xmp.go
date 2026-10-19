@@ -14,8 +14,10 @@ type XmpMeta struct {
 	XMLName xml.Name `xml:"xmpmeta"`
 	RDF     struct {
 		Description struct {
-			Rating   string `xml:"http://ns.adobe.com/xap/1.0/ Rating"`
-			MSRating string `xml:"http://ns.microsoft.com/photo/1.0/ Rating"`
+			Rating       string `xml:"http://ns.adobe.com/xap/1.0/ Rating"`
+			RatingAttr   string `xml:"http://ns.adobe.com/xap/1.0/ Rating,attr"`
+			MSRating     string `xml:"http://ns.microsoft.com/photo/1.0/ Rating"`
+			MSRatingAttr string `xml:"http://ns.microsoft.com/photo/1.0/ Rating,attr"`
 		} `xml:"Description"`
 	} `xml:"RDF"`
 }
@@ -71,26 +73,47 @@ func GetRating(xmpData []byte) (int, error) {
 		return 0, fmt.Errorf("Error parsing XMP data: %v", err)
 	}
 
+	// Ratings can be stored either as element or as attribute
+	adobeRating := firstNonEmpty(xmp.RDF.Description.Rating, xmp.RDF.Description.RatingAttr)
+	msRatingValue := firstNonEmpty(xmp.RDF.Description.MSRating, xmp.RDF.Description.MSRatingAttr)
+
 	// Check for Adobe XMP Rating first
-	if xmp.RDF.Description.Rating != "" {
+	if adobeRating != "" {
 		rating := 0
-		if _, err := fmt.Sscanf(xmp.RDF.Description.Rating, "%d", &rating); err != nil {
+		if _, err := fmt.Sscanf(adobeRating, "%d", &rating); err != nil {
 			return 0, fmt.Errorf("Error parsing Adobe rating: %v", err)
 		}
 		return rating, nil
 	}
 
 	// If no Adobe rating, check for Microsoft rating
-	if xmp.RDF.Description.MSRating != "" {
+	if msRatingValue != "" {
 		var msRating int
-		if _, err := fmt.Sscanf(xmp.RDF.Description.MSRating, "%d", &msRating); err != nil {
+		if _, err := fmt.Sscanf(msRatingValue, "%d", &msRating); err != nil {
 			return 0, fmt.Errorf("Error parsing Microsoft rating: %v", err)
 		}
-		// Konvertiere Microsoft Rating (0-99) zu Standard Rating (1-5)
-		return (msRating + 24) / 25, nil
+		return convertMSRating(msRating), nil
 	}
 
 	return 0, fmt.Errorf("No rating found in XMP data")
+}
+
+// convertMSRating converts a Microsoft rating (0-99) to a standard rating (0-5)
+// using the same ranges as Windows: 1-12 = 1, 13-37 = 2, 38-62 = 3, 63-87 = 4, 88-99 = 5
+func convertMSRating(msRating int) int {
+	if msRating <= 0 {
+		return 0
+	}
+	return min((msRating+12)/25+1, 5)
+}
+
+func firstNonEmpty(values ...string) string {
+	for _, v := range values {
+		if v != "" {
+			return v
+		}
+	}
+	return ""
 }
 
 func GetRatingFromFile(xmpPath string) (int, error) {

@@ -3,7 +3,6 @@ package counter
 import (
 	"os"
 	"path/filepath"
-	"strings"
 
 	"github.com/frommie/rawmanager/config"
 )
@@ -21,11 +20,11 @@ func (c *FileCounter) CountFiles(rootDir string, config *config.Config) error {
 
 		if !info.IsDir() {
 			// Count JPEGs
-			if strings.HasSuffix(strings.ToUpper(info.Name()), config.Files.JpegExtension) {
+			if config.Files.IsJpeg(info.Name()) {
 				c.JpegCount++
 			}
 			// Count RAWs
-			if strings.HasSuffix(strings.ToUpper(info.Name()), config.Files.RawExtension) {
+			if config.Files.IsRaw(info.Name()) {
 				c.RawCount++
 			}
 		}
