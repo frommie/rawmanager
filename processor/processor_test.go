@@ -471,3 +471,22 @@ func TestProcess_DryRunChangesNothing(t *testing.T) {
 		}
 	}
 }
+
+func TestProcess_FindsCounterpartWithDifferentExtensionCase(t *testing.T) {
+	tmpDir := t.TempDir()
+	jpgPath := filepath.Join(tmpDir, "img.JPG")
+	rawPath := filepath.Join(tmpDir, "raw", "img.raf") // config uses ".RAF"
+	if err := createTestFiles(t, jpgPath, rawPath, 1); err != nil {
+		t.Fatalf("Setup failed: %v", err)
+	}
+
+	proc, _, _ := newTestProcessor(tmpDir, config.NewDefaultConfig(), false)
+	if err := proc.Process(); err != nil {
+		t.Fatalf("Process() error = %v", err)
+	}
+
+	// Rating 1 deletes both files
+	if checkFileExists(t, jpgPath) || checkFileExists(t, rawPath) {
+		t.Error("JPEG/RAW pair with different extension case was not processed")
+	}
+}
