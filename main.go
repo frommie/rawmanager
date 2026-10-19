@@ -1,50 +1,62 @@
 package main
 
 import (
+	"errors"
 	"flag"
-	"github.com/frommie/rawmanager/config"
-	"github.com/frommie/rawmanager/processor"
+	"fmt"
+	"io"
 	"log"
 	"os"
+
+	"github.com/frommie/rawmanager/config"
+	"github.com/frommie/rawmanager/processor"
 )
 
 func main() {
+	if err := run(os.Args[1:], os.Stdout, os.Stderr); err != nil {
+		log.Fatal(err)
+	}
+}
+
+// run parses the command line arguments and processes the photo directory
+func run(args []string, stdout, stderr io.Writer) error {
 	var (
-		photosDir  string
 		configPath string
 		verbose    bool
 	)
 
-	flag.StringVar(&configPath, "config", "", "Path to YAML configuration file")
-	flag.BoolVar(&verbose, "v", false, "Verbose mode (shows detailed output)")
-	flag.Parse()
+	flags := flag.NewFlagSet("rawmanager", flag.ContinueOnError)
+	flags.SetOutput(stderr)
+	flags.StringVar(&configPath, "config", "", "Path to YAML configuration file (default: built-in configuration)")
+	flags.BoolVar(&verbose, "v", false, "Verbose mode (shows detailed output)")
+	if err := flags.Parse(args); err != nil {
+		if errors.Is(err, flag.ErrHelp) {
+			return nil
+		}
+		return err
+	}
 
-	// Check if a path was passed as an argument
-	args := flag.Args()
-	if len(args) > 0 {
-		photosDir = args[0]
-	} else {
+	// Use the directory passed as argument or the current directory
+	photosDir := flags.Arg(0)
+	if photosDir == "" {
 		var err error
 		photosDir, err = os.Getwd()
 		if err != nil {
-			log.Fatal("Error determining current directory:", err)
+			return fmt.Errorf("error determining current directory: %w", err)
 		}
 	}
 
-	// Load configuration
-	var cfg *config.Config
+	cfg := config.NewDefaultConfig()
 	if configPath != "" {
 		var err error
 		cfg, err = config.LoadConfig(configPath)
 		if err != nil {
-			log.Fatal("Error loading configuration:", err)
+			return fmt.Errorf("error loading configuration: %w", err)
 		}
-	} else {
-		cfg = config.NewDefaultConfig()
 	}
 
 	proc := processor.NewImageProcessor(photosDir, cfg, verbose)
-	if err := proc.Process(); err != nil {
-		log.Fatal(err)
-	}
+	proc.Out = stdout
+	proc.ErrOut = stderr
+	return proc.Process()
 }
