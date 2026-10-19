@@ -3,201 +3,163 @@ package jpeg
 import (
 	"bytes"
 	"fmt"
-	"github.com/disintegration/imaging"
-	"github.com/dsoprea/go-jpeg-image-structure/v2"
-	"github.com/frommie/rawmanager/config"
-	"github.com/frommie/rawmanager/xmp"
 	"math"
 	"os"
 	"path/filepath"
-	"strings"
+
+	"github.com/disintegration/imaging"
+	"github.com/dsoprea/go-jpeg-image-structure/v2"
+	"github.com/frommie/rawmanager/config"
 )
 
 const (
-	// XmpNamespace defines the namespace for Adobe XMP metadata
-	xmpNamespace = "http://ns.adobe.com/xap/1.0/"
+	// Markers of the application segments APP0 (JFIF), APP2 (e.g. ICC profile, MPF) and APP15
+	app0MarkerId  = 0xE0
+	app2MarkerId  = 0xE2
+	app15MarkerId = 0xEF
 
-	// app1MarkerId is the marker for APP1 segments in JPEG files (0xE1)
-	app1MarkerId = 0xE1
+	// comMarkerId is the marker for comment segments
+	comMarkerId = 0xFE
+
+	// mpfIdentifier identifies APP2 segments in the Multi-Picture Format
+	mpfIdentifier = "MPF\x00"
 )
 
-// GetRatingFromFile reads the rating from a JPEG file
-func GetRatingFromFile(jpgPath string, cfg *config.Config) (int, error) {
-	switch cfg.Xmp.Mode {
-	case config.XmpModeEmbedded:
-		// Read embedded XMP data from JPEG
-		file, err := os.Open(jpgPath)
-		if err != nil {
-			return 0, err
-		}
-		defer file.Close()
-
-		xmpData, err := xmp.ExtractXmpData(file)
-		if err != nil {
-			return 0, err
-		}
-
-		return xmp.GetRating(xmpData)
-
-	case config.XmpModeSeparate:
-		// Read separate .xmp file
-		xmpPath := jpgPath[:len(jpgPath)-len(filepath.Ext(jpgPath))] + ".xmp"
-		return xmp.GetRatingFromFile(xmpPath)
-
-	case config.XmpModeSeparateExt:
-		// Read .jpg.xmp file
-		xmpPath := jpgPath + ".xmp"
-		return xmp.GetRatingFromFile(xmpPath)
-
-	default:
-		return 0, fmt.Errorf("Invalid XMP mode: %s", cfg.Xmp.Mode)
-	}
+// ResizeResult describes the outcome of ResizeWithXMP
+type ResizeResult struct {
+	Resized bool // false if the image was already small enough
+	Width   int  // width of the resulting image
+	Height  int  // height of the resulting image
 }
 
-// ResizeWithXMP resizes a JPEG image while preserving XMP and EXIF metadata
-func ResizeWithXMP(jpgPath string, config *config.Config, verbose bool) error {
-	// Extract metadata from original image
-	exifSegment, xmpSegment, err := extractMetadata(jpgPath)
-	if err != nil {
-		return err
-	}
-
-	// Process and resize the image
-	newWidth, newHeight, err := resizeImage(jpgPath, config, verbose)
-	if err != nil {
-		return err
-	}
-
-	// If no resize was needed, return early
-	if newWidth == 0 && newHeight == 0 {
-		return nil
-	}
-
-	// Combine resized image with original metadata
-	if err := combineImageAndMetadata(jpgPath, exifSegment, xmpSegment, config); err != nil {
-		return err
-	}
-
-	if verbose {
-		fmt.Printf("Image %s resized to %dx%d pixels (EXIF and XMP data preserved)\n",
-			jpgPath, newWidth, newHeight)
-	}
-	return nil
-}
-
-// extractMetadata reads EXIF and XMP segments from the original JPEG
-func extractMetadata(jpgPath string) (*jpegstructure.Segment, *jpegstructure.Segment, error) {
+// ResizeWithXMP resizes a JPEG image to the target size while preserving XMP and EXIF metadata.
+// The original file is replaced atomically, so it stays intact if anything fails.
+func ResizeWithXMP(jpgPath string, cfg config.ProcessConfig) (ResizeResult, error) {
 	data, err := os.ReadFile(jpgPath)
 	if err != nil {
-		return nil, nil, fmt.Errorf("error reading file: %v", err)
+		return ResizeResult{}, fmt.Errorf("error reading file: %w", err)
 	}
 
-	jmp := jpegstructure.NewJpegMediaParser()
-	intfc, err := jmp.ParseBytes(data)
+	segments, err := parseSegments(data)
 	if err != nil {
-		return nil, nil, fmt.Errorf("error parsing JPEG file: %v", err)
+		return ResizeResult{}, fmt.Errorf("error parsing JPEG file: %w", err)
 	}
+	metadata := metadataSegments(segments)
 
-	sl := intfc.(*jpegstructure.SegmentList)
-	var exifSegment, xmpSegment *jpegstructure.Segment
-
-	for _, segment := range sl.Segments() {
-		if segment.MarkerId == app1MarkerId {
-			if bytes.HasPrefix(segment.Data, []byte(xmpNamespace)) {
-				xmpSegment = segment
-			} else {
-				exifSegment = segment
-			}
-		}
-	}
-
-	return exifSegment, xmpSegment, nil
-}
-
-// resizeImage performs the actual image resizing if needed
-func resizeImage(jpgPath string, config *config.Config, verbose bool) (int, int, error) {
-	img, err := imaging.Open(jpgPath)
+	img, err := imaging.Decode(bytes.NewReader(data))
 	if err != nil {
-		return 0, 0, fmt.Errorf("error opening image: %v", err)
+		return ResizeResult{}, fmt.Errorf("error decoding image: %w", err)
 	}
 
-	bounds := img.Bounds()
-	currentWidth := bounds.Max.X
-	currentHeight := bounds.Max.Y
-	currentMP := float64(currentWidth*currentHeight) / 1000000.0
-
-	if currentMP <= config.Process.TargetMegapixels {
-		if verbose {
-			fmt.Printf("Image %s is already small enough (%.1f MP)\n",
-				jpgPath, currentMP)
-		}
-		return 0, 0, nil
+	width, height := img.Bounds().Dx(), img.Bounds().Dy()
+	currentMP := float64(width*height) / 1000000.0
+	if currentMP <= cfg.TargetMegapixels {
+		return ResizeResult{Width: width, Height: height}, nil
 	}
 
-	ratio := math.Sqrt(config.Process.TargetMegapixels / currentMP)
-	newWidth := int(float64(currentWidth) * ratio)
-	newHeight := int(float64(currentHeight) * ratio)
-
+	ratio := math.Sqrt(cfg.TargetMegapixels / currentMP)
+	newWidth := int(float64(width) * ratio)
+	newHeight := int(float64(height) * ratio)
 	resized := imaging.Resize(img, newWidth, newHeight, imaging.Lanczos)
 
-	tempPath := strings.TrimSuffix(jpgPath, config.Files.JpegExtension) + "_temp.jpg"
-	if err := imaging.Save(resized, tempPath, imaging.JPEGQuality(config.Process.JpegQuality)); err != nil {
-		return 0, 0, fmt.Errorf("error saving temporary image: %v", err)
+	var encoded bytes.Buffer
+	if err := imaging.Encode(&encoded, resized, imaging.JPEG, imaging.JPEGQuality(cfg.JpegQuality)); err != nil {
+		return ResizeResult{}, fmt.Errorf("error encoding resized image: %w", err)
 	}
-	defer os.Remove(tempPath)
 
-	return newWidth, newHeight, nil
+	output, err := insertMetadata(encoded.Bytes(), metadata)
+	if err != nil {
+		return ResizeResult{}, err
+	}
+
+	if err := writeFileAtomic(jpgPath, output); err != nil {
+		return ResizeResult{}, fmt.Errorf("error saving resized JPEG: %w", err)
+	}
+
+	return ResizeResult{Resized: true, Width: newWidth, Height: newHeight}, nil
 }
 
-// combineImageAndMetadata combines the resized image with the original metadata
-func combineImageAndMetadata(jpgPath string, exifSegment, xmpSegment *jpegstructure.Segment, config *config.Config) error {
-	tempPath := strings.TrimSuffix(jpgPath, config.Files.JpegExtension) + "_temp.jpg"
-
-	// Read temporary file
-	newData, err := os.ReadFile(tempPath)
+func parseSegments(data []byte) ([]*jpegstructure.Segment, error) {
+	intfc, err := jpegstructure.NewJpegMediaParser().ParseBytes(data)
 	if err != nil {
-		return fmt.Errorf("error reading temporary image: %v", err)
+		return nil, err
+	}
+	return intfc.(*jpegstructure.SegmentList).Segments(), nil
+}
+
+// metadataSegments returns all segments of a JPEG that have to be preserved when re-encoding it:
+// APP1-APP15 (e.g. EXIF, XMP, ICC profile) and comments. APP0 (JFIF) is written by the encoder and
+// MPF is dropped, as its offsets to the embedded preview images would be invalid after re-encoding.
+func metadataSegments(segments []*jpegstructure.Segment) []*jpegstructure.Segment {
+	var result []*jpegstructure.Segment
+	for _, segment := range segments {
+		isApp := segment.MarkerId > app0MarkerId && segment.MarkerId <= app15MarkerId
+		isMpf := segment.MarkerId == app2MarkerId && bytes.HasPrefix(segment.Data, []byte(mpfIdentifier))
+		if (isApp && !isMpf) || segment.MarkerId == comMarkerId {
+			result = append(result, segment)
+		}
+	}
+	return result
+}
+
+// insertMetadata adds the metadata segments to the encoded JPEG data
+func insertMetadata(jpegData []byte, metadata []*jpegstructure.Segment) ([]byte, error) {
+	segments, err := parseSegments(jpegData)
+	if err != nil {
+		return nil, fmt.Errorf("error parsing resized image: %w", err)
 	}
 
-	jmp := jpegstructure.NewJpegMediaParser()
-	newIntfc, err := jmp.ParseBytes(newData)
-	if err != nil {
-		return fmt.Errorf("error parsing temporary image: %v", err)
-	}
-
-	newSl := newIntfc.(*jpegstructure.SegmentList)
-	segments := newSl.Segments()
-
-	// Find insertion position after APP0
+	// Insert after APP0 if present, otherwise directly after SOI
 	insertPos := 1
 	for i, seg := range segments {
-		if seg.MarkerId == 0xE0 {
+		if seg.MarkerId == app0MarkerId {
 			insertPos = i + 1
 			break
 		}
 	}
 
-	// Create new segment list with metadata
 	var newSegments []*jpegstructure.Segment
 	newSegments = append(newSegments, segments[:insertPos]...)
-	if exifSegment != nil {
-		newSegments = append(newSegments, exifSegment)
-	}
-	if xmpSegment != nil {
-		newSegments = append(newSegments, xmpSegment)
-	}
+	newSegments = append(newSegments, metadata...)
 	newSegments = append(newSegments, segments[insertPos:]...)
 
-	// Write final file
-	newJpeg := jpegstructure.NewSegmentList(newSegments)
 	var buffer bytes.Buffer
-	if err := newJpeg.Write(&buffer); err != nil {
-		return fmt.Errorf("error serializing JPEG data: %v", err)
+	if err := jpegstructure.NewSegmentList(newSegments).Write(&buffer); err != nil {
+		return nil, fmt.Errorf("error serializing JPEG data: %w", err)
+	}
+	return buffer.Bytes(), nil
+}
+
+// writeFileAtomic replaces the file at path with data, keeping its permissions.
+// The data is written to a temporary file in the same directory which is then renamed.
+func writeFileAtomic(path string, data []byte) (err error) {
+	info, err := os.Stat(path)
+	if err != nil {
+		return err
 	}
 
-	if err := os.WriteFile(jpgPath, buffer.Bytes(), 0644); err != nil {
-		return fmt.Errorf("error saving final JPEG: %v", err)
+	tmp, err := os.CreateTemp(filepath.Dir(path), "."+filepath.Base(path)+".*.tmp")
+	if err != nil {
+		return err
 	}
+	defer func() {
+		if err != nil {
+			tmp.Close()
+			os.Remove(tmp.Name())
+		}
+	}()
 
-	return nil
+	if _, err = tmp.Write(data); err != nil {
+		return err
+	}
+	if err = tmp.Sync(); err != nil {
+		return err
+	}
+	if err = tmp.Close(); err != nil {
+		return err
+	}
+	if err = os.Chmod(tmp.Name(), info.Mode().Perm()); err != nil {
+		return err
+	}
+	return os.Rename(tmp.Name(), path)
 }

@@ -3,22 +3,35 @@ package processor
 import (
 	"errors"
 	"fmt"
-	"github.com/frommie/rawmanager/config"
-	"github.com/frommie/rawmanager/counter"
-	"github.com/frommie/rawmanager/jpeg"
-	"github.com/schollz/progressbar/v3"
+	"io"
 	"os"
 	"path/filepath"
 	"strings"
+
+	"github.com/frommie/rawmanager/config"
+	"github.com/frommie/rawmanager/jpeg"
+	"github.com/frommie/rawmanager/xmp"
+	"github.com/schollz/progressbar/v3"
 )
 
 type ImageProcessor struct {
 	RootDir string
 	Config  *config.Config
 	Verbose bool
-	counter *counter.FileCounter
-	jpegBar *progressbar.ProgressBar
-	rawBar  *progressbar.ProgressBar
+	DryRun  bool      // only report the actions without changing any files
+	Out     io.Writer // progress bars and info messages
+	ErrOut  io.Writer // warnings
+
+	jpegCount int
+	rawCount  int
+	jpegBar   *progressbar.ProgressBar
+	rawBar    *progressbar.ProgressBar
+}
+
+// directoryPair is a directory with JPEG files and the directory containing the corresponding RAW files
+type directoryPair struct {
+	jpegDir string
+	rawDir  string
 }
 
 func NewImageProcessor(rootDir string, cfg *config.Config, verbose bool) *ImageProcessor {
@@ -26,274 +39,265 @@ func NewImageProcessor(rootDir string, cfg *config.Config, verbose bool) *ImageP
 		RootDir: rootDir,
 		Config:  cfg,
 		Verbose: verbose,
+		Out:     os.Stdout,
+		ErrOut:  os.Stderr,
 	}
 }
 
-// Helper method for output
-func (p *ImageProcessor) logf(format string, args ...interface{}) error {
+// infof prints a message in verbose mode
+func (p *ImageProcessor) infof(format string, args ...interface{}) {
 	if p.Verbose {
-		// Save position of both status bars
+		p.printf(p.Out, format, args...)
+	}
+}
+
+// warnf always prints a message
+func (p *ImageProcessor) warnf(format string, args ...interface{}) {
+	p.printf(p.ErrOut, "Warning: "+format, args...)
+}
+
+// perform executes an action, or only reports it in dry-run mode.
+// The description names the action, e.g. "delete RAW <path>".
+func (p *ImageProcessor) perform(description string, action func() error) error {
+	if p.DryRun {
+		p.printf(p.Out, "[dry-run] Would %s\n", description)
+		return nil
+	}
+	p.infof("%s%s\n", strings.ToUpper(description[:1]), description[1:])
+	return action()
+}
+
+// printf prints a message without breaking the progress bars
+func (p *ImageProcessor) printf(w io.Writer, format string, args ...interface{}) {
+	if p.jpegBar != nil {
 		p.jpegBar.Clear()
 		p.rawBar.Clear()
-		// Print message
-		fmt.Printf(format, args...)
-		// Restore status bars
+	}
+	fmt.Fprintf(w, format, args...)
+	if p.jpegBar != nil {
 		p.rawBar.RenderBlank()
 		p.jpegBar.RenderBlank()
 	}
-	// Return error with message
-	return fmt.Errorf(format, args...)
 }
 
 func (p *ImageProcessor) Process() error {
-	// Count files
-	p.counter = &counter.FileCounter{}
-	if err := p.counter.CountFiles(p.RootDir, p.Config); err != nil {
+	dirs, err := p.findDirectories()
+	if err != nil {
 		return err
 	}
 
-	// Initialize JPEG progress bar
-	p.jpegBar = progressbar.NewOptions(p.counter.JpegCount,
-		progressbar.OptionEnableColorCodes(true),
-		progressbar.OptionShowCount(),
-		progressbar.OptionSetDescription("[cyan][1/2]Processing JPEGs..."),
-		progressbar.OptionSetTheme(progressbar.Theme{
-			Saucer:        "[green]=[reset]",
-			SaucerHead:    "[green]>[reset]",
-			SaucerPadding: " ",
-			BarStart:      "[",
-			BarEnd:        "]",
-		}))
+	p.jpegCount, p.rawCount = p.countFiles(dirs)
+	p.jpegBar = p.newProgressBar(p.jpegCount, "[cyan][1/2]Processing JPEGs...", "green")
+	p.rawBar = p.newProgressBar(p.rawCount, "[cyan][2/2]Processing RAWs... ", "yellow")
 
-	// Initialize RAW progress bar
-	p.rawBar = progressbar.NewOptions(p.counter.RawCount,
-		progressbar.OptionEnableColorCodes(true),
-		progressbar.OptionShowCount(),
-		progressbar.OptionSetDescription("[cyan][2/2]Processing RAWs... "),
-		progressbar.OptionSetTheme(progressbar.Theme{
-			Saucer:        "[yellow]=[reset]",
-			SaucerHead:    "[yellow]>[reset]",
-			SaucerPadding: " ",
-			BarStart:      "[",
-			BarEnd:        "]",
-		}))
-
-	// Start processing
-	if err := p.Walk(); err != nil {
-		return err
+	for _, dir := range dirs {
+		p.processDirectory(dir)
 	}
-
 	return nil
 }
 
-func (p *ImageProcessor) ProcessJPEG(jpgPath, rawPath string) error {
-	// Check if JPEG exists
-	if _, err := os.Stat(jpgPath); err != nil {
-		if errors.Is(err, os.ErrNotExist) {
-			// Apply NoJpegAction
-			if p.Config.NoJpegAction.DeleteRaw {
-				p.logf("Deleting %s (no corresponding JPG file found)\n", rawPath)
-				return os.Remove(rawPath)
-			}
+func (p *ImageProcessor) newProgressBar(count int, description, color string) *progressbar.ProgressBar {
+	return progressbar.NewOptions(count,
+		progressbar.OptionSetWriter(p.Out),
+		progressbar.OptionEnableColorCodes(true),
+		progressbar.OptionShowCount(),
+		progressbar.OptionSetDescription(description),
+		progressbar.OptionSetTheme(progressbar.Theme{
+			Saucer:        "[" + color + "]=[reset]",
+			SaucerHead:    "[" + color + "]>[reset]",
+			SaucerPadding: " ",
+			BarStart:      "[",
+			BarEnd:        "]",
+		}))
+}
+
+// findDirectories returns all directories to process. Hidden directories are skipped.
+func (p *ImageProcessor) findDirectories() ([]directoryPair, error) {
+	var dirs []directoryPair
+	err := filepath.WalkDir(p.RootDir, func(path string, d os.DirEntry, err error) error {
+		if err != nil {
+			p.warnf("Error accessing %s: %v\n", path, err)
 			return nil
 		}
-		return err
-	}
+		if !d.IsDir() {
+			return nil
+		}
+		if path != p.RootDir && strings.HasPrefix(d.Name(), ".") {
+			return filepath.SkipDir
+		}
 
-	// Get rating from JPEG or XMP file
-	rating, err := jpeg.GetRatingFromFile(jpgPath, p.Config)
+		if p.Config.Files.SameDir {
+			// RAWs are in the same directory as the JPEGs
+			dirs = append(dirs, directoryPair{jpegDir: path, rawDir: path})
+		} else if path != p.RootDir && d.Name() == p.Config.Files.RawFolder {
+			// RAWs are in a subdirectory of the JPEG directory
+			dirs = append(dirs, directoryPair{jpegDir: filepath.Dir(path), rawDir: path})
+		}
+		return nil
+	})
+	return dirs, err
+}
+
+func (p *ImageProcessor) countFiles(dirs []directoryPair) (jpegCount, rawCount int) {
+	for _, dir := range dirs {
+		jpegCount += len(p.listFiles(dir.jpegDir, p.Config.Files.IsJpeg))
+		rawCount += len(p.listFiles(dir.rawDir, p.Config.Files.IsRaw))
+	}
+	return jpegCount, rawCount
+}
+
+// listFiles returns the names of all files in dir that match
+func (p *ImageProcessor) listFiles(dir string, match func(name string) bool) []string {
+	entries, err := os.ReadDir(dir)
 	if err != nil {
-		return fmt.Errorf("Error reading rating: %v", err)
+		p.warnf("Error reading directory %s: %v\n", dir, err)
+		return nil
 	}
 
-	// Get configured actions for this rating
+	var names []string
+	for _, entry := range entries {
+		if !entry.IsDir() && match(entry.Name()) {
+			names = append(names, entry.Name())
+		}
+	}
+	return names
+}
+
+// processDirectory processes the JPEGs first and then applies the NoJpegAction to RAWs without JPEG
+func (p *ImageProcessor) processDirectory(dir directoryPair) {
+	// List RAWs before processing the JPEGs, which may delete some of them,
+	// so that the progress bar matches the counted files
+	rawNames := p.listFiles(dir.rawDir, p.Config.Files.IsRaw)
+
+	for _, name := range p.listFiles(dir.jpegDir, p.Config.Files.IsJpeg) {
+		p.jpegBar.Add(1)
+		if err := p.processJpegFile(dir, name); err != nil {
+			p.warnf("%v\n", err)
+		}
+	}
+
+	for _, name := range rawNames {
+		p.rawBar.Add(1)
+		if err := p.processRawFile(dir, name); err != nil {
+			p.warnf("%v\n", err)
+		}
+	}
+}
+
+func (p *ImageProcessor) processJpegFile(dir directoryPair, name string) error {
+	jpgPath := filepath.Join(dir.jpegDir, name)
+	rawPath := counterpartPath(dir.rawDir, name, p.Config.Files.JpegExtension, p.Config.Files.RawExtension)
+
+	if _, err := os.Stat(rawPath); errors.Is(err, os.ErrNotExist) {
+		p.infof("Skipping %s (no RAW file found)\n", jpgPath)
+		return nil
+	}
+
+	err := p.processJPEG(jpgPath, rawPath)
+	if errors.Is(err, xmp.ErrNoRating) {
+		p.infof("Skipping %s (no rating)\n", jpgPath)
+		return nil
+	}
+	if err != nil {
+		return fmt.Errorf("error processing %s: %w", jpgPath, err)
+	}
+	return nil
+}
+
+// processJPEG executes the actions configured for the rating of the JPEG
+func (p *ImageProcessor) processJPEG(jpgPath, rawPath string) error {
+	rating, err := xmp.ReadRating(jpgPath, p.Config.Xmp.Mode)
+	if err != nil {
+		return fmt.Errorf("error reading rating: %w", err)
+	}
+
 	action, exists := p.Config.RatingActions[rating]
 	if !exists {
-		return p.logf("No action configured for rating %d", rating)
+		p.infof("Skipping %s (no action configured for rating %d)\n", jpgPath, rating)
+		return nil
 	}
 
-	// Execute configured actions
 	if action.DeleteRaw {
-		p.logf("Deleting RAW %s (Rating %d)\n", rawPath, rating)
-		if err := p.deleteFile(rawPath); err != nil {
+		description := fmt.Sprintf("delete RAW %s (Rating %d)", rawPath, rating)
+		if err := p.perform(description, func() error { return p.deleteFile(rawPath) }); err != nil {
 			return err
 		}
 	}
 
 	if action.DeleteJpeg {
-		p.logf("Deleting JPEG %s (Rating %d)\n", jpgPath, rating)
-		if err := p.deleteFile(jpgPath); err != nil {
+		description := fmt.Sprintf("delete JPEG %s (Rating %d)", jpgPath, rating)
+		if err := p.perform(description, func() error { return p.deleteFile(jpgPath) }); err != nil {
 			return err
 		}
 	}
 
 	if action.CompressJpeg {
-		p.logf("Compressing JPEG %s (Rating %d)\n", jpgPath, rating)
-		if err := jpeg.ResizeWithXMP(jpgPath, p.Config, p.Verbose); err != nil {
+		description := fmt.Sprintf("compress JPEG %s (Rating %d)", jpgPath, rating)
+		if err := p.perform(description, func() error { return p.compressJpeg(jpgPath) }); err != nil {
 			return err
 		}
 	}
 
+	return nil
+}
+
+func (p *ImageProcessor) compressJpeg(jpgPath string) error {
+	result, err := jpeg.ResizeWithXMP(jpgPath, p.Config.Process)
+	if err != nil {
+		return err
+	}
+	if result.Resized {
+		p.infof("Image %s resized to %dx%d pixels (metadata preserved)\n", jpgPath, result.Width, result.Height)
+	} else {
+		p.infof("Image %s is already small enough (%dx%d pixels)\n", jpgPath, result.Width, result.Height)
+	}
+	return nil
+}
+
+// processRawFile applies the NoJpegAction to a RAW file without JPEG
+func (p *ImageProcessor) processRawFile(dir directoryPair, name string) error {
+	rawPath := filepath.Join(dir.rawDir, name)
+	if _, err := os.Stat(rawPath); errors.Is(err, os.ErrNotExist) {
+		// Already deleted because of the rating of its JPEG
+		return nil
+	}
+	jpgPath := counterpartPath(dir.jpegDir, name, p.Config.Files.RawExtension, p.Config.Files.JpegExtension)
+
+	_, err := os.Stat(jpgPath)
+	if err == nil {
+		return nil
+	}
+	if !errors.Is(err, os.ErrNotExist) {
+		return fmt.Errorf("error checking %s: %w", jpgPath, err)
+	}
+
+	if p.Config.NoJpegAction.DeleteRaw {
+		description := fmt.Sprintf("delete RAW %s (no JPEG found)", rawPath)
+		return p.perform(description, func() error { return p.deleteFile(rawPath) })
+	}
 	return nil
 }
 
 func (p *ImageProcessor) deleteFile(path string) error {
 	if err := os.Remove(path); err != nil {
 		if !errors.Is(err, os.ErrNotExist) {
-			return fmt.Errorf("Error deleting %s: %v", path, err)
+			return fmt.Errorf("error deleting %s: %w", path, err)
 		}
-		p.logf("Warning: %s has already been deleted\n", path)
+		p.warnf("%s has already been deleted\n", path)
 	}
 	return nil
 }
 
-func (p *ImageProcessor) deleteFiles(paths ...string) error {
-	for _, path := range paths {
-		if err := p.deleteFile(path); err != nil {
-			return err
+// counterpartPath returns the path of the file in dir that belongs to name, with ext replaced by
+// otherExt. As file systems can be case-sensitive, the configured, upper and lower case variants
+// of otherExt are tried. If none exists, the path with the configured extension is returned.
+func counterpartPath(dir, name, ext, otherExt string) string {
+	base := name[:len(name)-len(ext)]
+	for _, candidateExt := range []string{otherExt, strings.ToUpper(otherExt), strings.ToLower(otherExt)} {
+		candidate := filepath.Join(dir, base+candidateExt)
+		if _, err := os.Stat(candidate); err == nil {
+			return candidate
 		}
 	}
-	return nil
-}
-
-// ProcessDirectory only coordinates the process
-func (p *ImageProcessor) ProcessDirectory(rawDir string, parentDir string) error {
-	if err := p.validateDirectories(rawDir, parentDir); err != nil {
-		return err
-	}
-
-	if err := p.processJpegFiles(rawDir, parentDir); err != nil {
-		return err
-	}
-
-	if err := p.processRawFiles(rawDir, parentDir); err != nil {
-		return err
-	}
-
-	return nil
-}
-
-// Help function for validating the directories
-func (p *ImageProcessor) validateDirectories(rawDir string, parentDir string) error {
-	if _, err := os.Stat(rawDir); err != nil {
-		if os.IsNotExist(err) {
-			p.logf("Info: Skipping non-existent directory: %s\n", rawDir)
-			return nil
-		}
-		return fmt.Errorf("Error accessing directory %s: %v", rawDir, err)
-	}
-	return nil
-}
-
-// Processing JPEG files
-func (p *ImageProcessor) processJpegFiles(rawDir string, parentDir string) error {
-	jpegFiles, err := os.ReadDir(parentDir)
-	if err != nil {
-		if os.IsNotExist(err) {
-			p.logf("Info: Skipping non-existent directory: %s\n", parentDir)
-			return nil
-		}
-		return fmt.Errorf("Error reading JPEG directory %s: %v", parentDir, err)
-	}
-
-	for _, file := range jpegFiles {
-		if err := p.processJpegFile(file, rawDir, parentDir); err != nil {
-			p.logf("Warning: %v\n", err)
-			continue
-		}
-	}
-	return nil
-}
-
-// Processing of single JPEG file
-func (p *ImageProcessor) processJpegFile(file os.DirEntry, rawDir string, parentDir string) error {
-	if !file.IsDir() && strings.HasSuffix(strings.ToUpper(file.Name()), p.Config.Files.JpegExtension) {
-		p.jpegBar.Add(1)
-		jpgPath := filepath.Join(parentDir, file.Name())
-		rawName := file.Name()[:len(file.Name())-len(p.Config.Files.JpegExtension)] + p.Config.Files.RawExtension
-		rawPath := filepath.Join(rawDir, rawName)
-
-		if _, err := os.Stat(rawPath); err != nil && os.IsNotExist(err) {
-			return fmt.Errorf("No RAW file found for: %s", jpgPath)
-		}
-
-		if err := p.ProcessJPEG(jpgPath, rawPath); err != nil {
-			return fmt.Errorf("Error when processing %s: %v", jpgPath, err)
-		}
-	}
-	return nil
-}
-
-// Processing RAW files
-func (p *ImageProcessor) processRawFiles(rawDir string, parentDir string) error {
-	rawFiles, err := os.ReadDir(rawDir)
-	if err != nil {
-		if os.IsNotExist(err) {
-			p.logf("Info: Skipping non-existent directory: %s\n", rawDir)
-			return nil
-		}
-		return fmt.Errorf("Error reading RAW directory %s: %v", rawDir, err)
-	}
-
-	for _, file := range rawFiles {
-		if err := p.processRawFile(file, rawDir, parentDir); err != nil {
-			p.logf("Warning: %v\n", err)
-			continue
-		}
-	}
-	return nil
-}
-
-// Processing of single RAW file
-func (p *ImageProcessor) processRawFile(file os.DirEntry, rawDir string, parentDir string) error {
-	if !file.IsDir() && strings.HasSuffix(strings.ToUpper(file.Name()), p.Config.Files.RawExtension) {
-		p.rawBar.Add(1)
-		rawPath := filepath.Join(rawDir, file.Name())
-		jpgName := file.Name()[:len(file.Name())-len(p.Config.Files.RawExtension)] + p.Config.Files.JpegExtension
-		jpgPath := filepath.Join(parentDir, jpgName)
-
-		if _, err := os.Stat(jpgPath); err != nil {
-			if os.IsNotExist(err) {
-				if err := p.deleteFile(rawPath); err != nil {
-					return fmt.Errorf("Error when deleting %s: %v", rawPath, err)
-				}
-				p.logf("Info: RAW file deleted (no JPG found): %s\n", rawPath)
-			} else {
-				return fmt.Errorf("Error when checking %s: %v", jpgPath, err)
-			}
-		}
-	}
-	return nil
-}
-
-func (p *ImageProcessor) Walk() error {
-	return filepath.Walk(p.RootDir, func(path string, info os.FileInfo, err error) error {
-		if err != nil {
-			if os.IsNotExist(err) {
-				p.logf("Info: Skip non-existing path: %s\n", path)
-				return nil
-			}
-			p.logf("Warning: Error accessing %s: %v\n", path, err)
-			return nil
-		}
-
-		// If RAWs are in same directory, process each directory
-		if p.Config.Files.SameDir {
-			if info.IsDir() && !strings.HasPrefix(info.Name(), ".") {
-				if err := p.ProcessDirectory(path, path); err != nil {
-					p.logf("Warning: Error processing %s: %v\n", path, err)
-				}
-			}
-			return nil
-		}
-
-		// Otherwise only process RAW subdirectories
-		if info.IsDir() && info.Name() == p.Config.Files.RawFolder {
-			parentDir := filepath.Dir(path)
-			if err := p.ProcessDirectory(path, parentDir); err != nil {
-				p.logf("Warning: Error processing %s: %v\n", path, err)
-			}
-		}
-		return nil
-	})
+	return filepath.Join(dir, base+otherExt)
 }

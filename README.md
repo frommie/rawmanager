@@ -1,6 +1,7 @@
 # rawmanager
 
 ![Version](https://img.shields.io/github/v/release/frommie/rawmanager)
+[![CI](https://github.com/frommie/rawmanager/actions/workflows/ci.yml/badge.svg)](https://github.com/frommie/rawmanager/actions/workflows/ci.yml)
 [![Go Report Card](https://goreportcard.com/badge/github.com/frommie/rawmanager)](https://goreportcard.com/report/github.com/frommie/rawmanager)
 [![License](https://img.shields.io/github/license/frommie/rawmanager)](LICENSE)
 
@@ -9,10 +10,11 @@ A tool to manage RAW image files based on their corresponding JPEG ratings.
 ## Features
 
 - Processes RAW+JPEG pairs in your photo library
-- Deletes or resize files based on JPEG ratings (1-5 stars)
-- Resizing preserves EXIF data
+- Deletes or resizes files based on JPEG ratings (1-5 stars)
+- Resizing preserves metadata (EXIF, XMP, ICC color profile)
 - Supports embedded and separate XMP metadata
 - Configurable actions for each rating level
+- Dry-run mode to preview all actions
 - Progress bars and detailed logging (optional)
 
 ## Installation
@@ -34,17 +36,18 @@ go install
 ## Usage
 
 ```bash
-rawmanager [-config path/to/config.yaml] [-v] [directory]
+rawmanager [-config path/to/config.yaml] [-v] [-dry-run] [directory]
 ```
 
 Options:
-- `-config`: Path to configuration file (default: config.yaml)
+- `-config`: Path to configuration file (default: built-in configuration, see below)
 - `-v`: Verbose output
+- `-dry-run`: Only show what would be done without changing any files
 - `directory`: Directory to process (default: current directory)
 
 ## Configuration
 
-Create a `config.yaml` file to customize the behavior. The [default config](config.yaml) is as follows:
+Create a `config.yaml` file to customize the behavior and pass it with `-config`. Settings missing in your file keep their default values; if you specify `ratingActions`, only the ratings listed there have an action. Deleting the JPEG requires deleting the RAW as well (`deleteJpeg: true` needs `deleteRaw: true`), and a deleted JPEG cannot be compressed (`deleteJpeg` and `compressJpeg` cannot both be `true`). Hidden directories are skipped. The [default config](config.yaml) is as follows:
 
 ```yaml
 # Rating Actions (0-5)
@@ -79,14 +82,25 @@ files:
 # Process Configuration
 process:
   targetMegapixels: 10.0 # Target size for JPEG compression
-  jpegQuality: 95        # JPEG quality (0-100)
+  jpegQuality: 95        # JPEG quality (1-100)
+```
+
+### Ratings
+
+The rating is read from the XMP data (`xmp:Rating`, or the Microsoft rating as fallback). JPEGs without a rating are skipped. Photos marked as rejected (e.g. in Lightroom) have the rating `-1` and can be handled like any other rating:
+
+```yaml
+ratingActions:
+  -1:
+    deleteRaw: true
+    deleteJpeg: true
 ```
 
 ## Requirements
 
-- Go 1.16 or higher
+- Go 1.22 or higher
 - Operating systems: macOS, Linux, Windows
 
 ## License
 
-This project is licensed under the [MIT License](LICENSE.md).
+This project is licensed under the [MIT License](LICENSE).

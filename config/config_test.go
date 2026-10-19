@@ -3,6 +3,7 @@ package config
 import (
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 )
 
@@ -36,5 +37,168 @@ xmp:
 				t.Errorf("LoadConfig() error = %v, wantErr %v", err, tt.wantErr)
 			}
 		})
+	}
+}
+
+func writeConfig(t *testing.T, content string) string {
+	t.Helper()
+	path := filepath.Join(t.TempDir(), "config.yaml")
+	if err := os.WriteFile(path, []byte(content), 0644); err != nil {
+		t.Fatalf("Failed to write config file: %v", err)
+	}
+	return path
+}
+
+func TestLoadConfig_PartialConfigKeepsDefaults(t *testing.T) {
+	cfg, err := LoadConfig(writeConfig(t, `
+xmp:
+  mode: separate
+`))
+	if err != nil {
+		t.Fatalf("LoadConfig() error = %v", err)
+	}
+
+	defaults := NewDefaultConfig()
+	if cfg.Xmp.Mode != XmpModeSeparate {
+		t.Errorf("Xmp.Mode = %q, want %q", cfg.Xmp.Mode, XmpModeSeparate)
+	}
+	if cfg.Files != defaults.Files {
+		t.Errorf("Files = %+v, want defaults %+v", cfg.Files, defaults.Files)
+	}
+	if cfg.Process != defaults.Process {
+		t.Errorf("Process = %+v, want defaults %+v", cfg.Process, defaults.Process)
+	}
+	if len(cfg.RatingActions) != len(defaults.RatingActions) {
+		t.Errorf("RatingActions = %v, want defaults", cfg.RatingActions)
+	}
+}
+
+func TestLoadConfig_RatingActionsReplaceDefaults(t *testing.T) {
+	cfg, err := LoadConfig(writeConfig(t, `
+ratingActions:
+  1:
+    deleteRaw: true
+`))
+	if err != nil {
+		t.Fatalf("LoadConfig() error = %v", err)
+	}
+
+	if _, exists := cfg.RatingActions[2]; exists {
+		t.Errorf("RatingActions contains default for rating 2, want only configured ratings: %v", cfg.RatingActions)
+	}
+	if !cfg.RatingActions[1].DeleteRaw {
+		t.Errorf("RatingActions[1].DeleteRaw = false, want true")
+	}
+}
+
+func TestLoadConfig_RejectsEmptyExtensions(t *testing.T) {
+	tests := []struct {
+		name string
+		yaml string
+	}{
+		{"Empty RAW extension", "files:\n  rawExtension: \"\"\n"},
+		{"Empty JPEG extension", "files:\n  jpegExtension: \"\"\n"},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if _, err := LoadConfig(writeConfig(t, tt.yaml)); err == nil {
+				t.Error("LoadConfig() error = nil, want error")
+			}
+		})
+	}
+}
+
+func TestFileConfig_IgnoresExtensionCase(t *testing.T) {
+	files := FileConfig{JpegExtension: ".jpg", RawExtension: ".RAF"}
+
+	for _, name := range []string{"a.jpg", "a.JPG", "a.Jpg"} {
+		if !files.IsJpeg(name) {
+			t.Errorf("IsJpeg(%q) = false, want true", name)
+		}
+	}
+	for _, name := range []string{"a.raf", "a.RAF"} {
+		if !files.IsRaw(name) {
+			t.Errorf("IsRaw(%q) = false, want true", name)
+		}
+	}
+	for _, name := range []string{"a.jpeg", "a.RAF.xmp", "jpg"} {
+		if files.IsJpeg(name) {
+			t.Errorf("IsJpeg(%q) = true, want false", name)
+		}
+	}
+}
+
+func TestLoadConfig_RejectsDeleteJpegWithoutDeleteRaw(t *testing.T) {
+	_, err := LoadConfig(writeConfig(t, `
+ratingActions:
+  1:
+    deleteRaw: false
+    deleteJpeg: true
+`))
+	if err == nil {
+		t.Fatal("LoadConfig() error = nil, want error")
+	}
+	if !strings.Contains(err.Error(), "rating 1") {
+		t.Errorf("LoadConfig() error = %q, want it to name rating 1", err)
+	}
+}
+
+func TestLoadConfig_RejectsDeleteJpegWithCompressJpeg(t *testing.T) {
+	_, err := LoadConfig(writeConfig(t, `
+ratingActions:
+  2:
+    deleteRaw: true
+    deleteJpeg: true
+    compressJpeg: true
+`))
+	if err == nil {
+		t.Fatal("LoadConfig() error = nil, want error")
+	}
+	if !strings.Contains(err.Error(), "rating 2") {
+		t.Errorf("LoadConfig() error = %q, want it to name rating 2", err)
+	}
+}
+
+func TestLoadConfig_RejectsInvalidProcessSettings(t *testing.T) {
+	tests := []struct {
+		name string
+		yaml string
+	}{
+		{"JPEG quality 0", "process:\n  jpegQuality: 0\n"},
+		{"JPEG quality above 100", "process:\n  jpegQuality: 101\n"},
+		{"Target megapixels 0", "process:\n  targetMegapixels: 0\n"},
+		{"Negative target megapixels", "process:\n  targetMegapixels: -1\n"},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if _, err := LoadConfig(writeConfig(t, tt.yaml)); err == nil {
+				t.Error("LoadConfig() error = nil, want error")
+			}
+		})
+	}
+}
+
+func TestLoadConfig_AcceptsProcessSettingLimits(t *testing.T) {
+	for _, yaml := range []string{"process:\n  jpegQuality: 1\n", "process:\n  jpegQuality: 100\n", "process:\n  targetMegapixels: 0.5\n"} {
+		if _, err := LoadConfig(writeConfig(t, yaml)); err != nil {
+			t.Errorf("LoadConfig(%q) error = %v", yaml, err)
+		}
+	}
+}
+
+func TestLoadConfig_RejectedRating(t *testing.T) {
+	cfg, err := LoadConfig(writeConfig(t, `
+ratingActions:
+  -1:
+    deleteRaw: true
+    deleteJpeg: true
+`))
+	if err != nil {
+		t.Fatalf("LoadConfig() error = %v", err)
+	}
+	if action := cfg.RatingActions[-1]; !action.DeleteRaw || !action.DeleteJpeg {
+		t.Errorf("RatingActions[-1] = %+v, want deleteRaw and deleteJpeg", action)
 	}
 }

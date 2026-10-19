@@ -3,20 +3,38 @@ package processor
 import (
 	"bytes"
 	"fmt"
-	"io"
 	"os"
 	"path/filepath"
 	"strings"
 	"testing"
 
 	"github.com/frommie/rawmanager/config"
-	"github.com/frommie/rawmanager/counter"
 	"github.com/frommie/rawmanager/testutils"
 	"github.com/schollz/progressbar/v3"
 )
 
 func createTestConfig() *config.Config {
 	return config.NewDefaultConfig()
+}
+
+// newTestProcessor creates a processor that writes its output into buffers instead of the terminal
+func newTestProcessor(rootDir string, cfg *config.Config, verbose bool) (*ImageProcessor, *bytes.Buffer, *bytes.Buffer) {
+	var out, errOut bytes.Buffer
+	proc := NewImageProcessor(rootDir, cfg, verbose)
+	proc.Out = &out
+	proc.ErrOut = &errOut
+	return proc, &out, &errOut
+}
+
+// createFile creates an empty file including its parent directories
+func createFile(t *testing.T, path string) {
+	t.Helper()
+	if err := os.MkdirAll(filepath.Dir(path), 0755); err != nil {
+		t.Fatalf("Setup failed: %v", err)
+	}
+	if err := os.WriteFile(path, []byte("RAW"), 0644); err != nil {
+		t.Fatalf("Setup failed: %v", err)
+	}
 }
 
 // Helper function to check file existence
@@ -31,20 +49,20 @@ func createTestFiles(t *testing.T, jpgPath, rawPath string, rating int) error {
 
 	// Ensure parent directory exists
 	if err := os.MkdirAll(filepath.Dir(jpgPath), 0755); err != nil {
-		return fmt.Errorf("Error creating JPEG directory: %v", err)
+		return fmt.Errorf("error creating JPEG directory: %w", err)
 	}
 	if err := os.MkdirAll(filepath.Dir(rawPath), 0755); err != nil {
-		return fmt.Errorf("Error creating RAW directory: %v", err)
+		return fmt.Errorf("error creating RAW directory: %w", err)
 	}
 
 	// Create JPEG with rating in temporary directory
 	if err := testutils.CreateTestJPEGWithEmbeddedXMP(t, jpgPath, rating); err != nil {
-		return fmt.Errorf("Error creating test JPEG: %v", err)
+		return fmt.Errorf("error creating test JPEG: %w", err)
 	}
 
 	// Create empty RAW file in temporary directory
 	if err := os.WriteFile(rawPath, []byte("RAW"), 0644); err != nil {
-		return fmt.Errorf("Error creating test RAW: %v", err)
+		return fmt.Errorf("error creating test RAW: %w", err)
 	}
 
 	return nil
@@ -95,18 +113,10 @@ func TestProcessJPEG(t *testing.T) {
 				t.Fatalf("Setup failed: %v", err)
 			}
 
-			proc := &ImageProcessor{
-				RootDir: tmpDir,
-				Config:  createTestConfig(),
-				Verbose: true,
-			}
+			proc, _, _ := newTestProcessor(tmpDir, createTestConfig(), true)
 
-			// Initialize progress bars
-			proc.jpegBar = progressbar.NewOptions(1)
-			proc.rawBar = progressbar.NewOptions(1)
-
-			if err := proc.ProcessJPEG(jpgPath, rawPath); err != nil {
-				t.Errorf("ProcessJPEG() error = %v", err)
+			if err := proc.processJPEG(jpgPath, rawPath); err != nil {
+				t.Errorf("processJPEG() error = %v", err)
 			}
 
 			// Check results with relative paths
@@ -164,11 +174,7 @@ func TestImageProcessor_Process(t *testing.T) {
 				t.Fatalf("Setup failed: %v", err)
 			}
 
-			proc := &ImageProcessor{
-				RootDir: tmpDir,
-				Config:  config.NewDefaultConfig(),
-				Verbose: true,
-			}
+			proc, _, _ := newTestProcessor(tmpDir, config.NewDefaultConfig(), true)
 
 			if err := proc.Process(); err != nil != tt.wantErr {
 				t.Errorf("Process() error = %v, wantErr %v", err, tt.wantErr)
@@ -177,103 +183,310 @@ func TestImageProcessor_Process(t *testing.T) {
 	}
 }
 
-func TestProgressBars(t *testing.T) {
-	// Setup: Create temporary test directory
-	tmpDir := t.TempDir()
-
-	// Setup test files with relative names
-	files := map[string]int{
-		"img1": 1,
-		"img2": 2,
-		"img3": 3,
+func TestProcess_NoJpegAction(t *testing.T) {
+	tests := []struct {
+		name       string
+		deleteRaw  bool
+		wantRawDel bool
+	}{
+		{"Orphaned RAW is deleted when configured", true, true},
+		{"Orphaned RAW is kept when configured", false, false},
 	}
 
-	// Create test files
-	for name, rating := range files {
-		jpgPath := filepath.Join(tmpDir, name+".JPG")
-		rawDir := filepath.Join(tmpDir, "raw")
-		rawPath := filepath.Join(rawDir, name+".RAF")
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			tmpDir := t.TempDir()
+			rawPath := filepath.Join(tmpDir, "raw", "orphan.RAF")
+			if err := os.MkdirAll(filepath.Dir(rawPath), 0755); err != nil {
+				t.Fatalf("Setup failed: %v", err)
+			}
+			if err := os.WriteFile(rawPath, []byte("RAW"), 0644); err != nil {
+				t.Fatalf("Setup failed: %v", err)
+			}
 
+			cfg := config.NewDefaultConfig()
+			cfg.NoJpegAction.DeleteRaw = tt.deleteRaw
+
+			proc, _, _ := newTestProcessor(tmpDir, cfg, false)
+			if err := proc.Process(); err != nil {
+				t.Fatalf("Process() error = %v", err)
+			}
+
+			if exists := checkFileExists(t, rawPath); exists != !tt.wantRawDel {
+				t.Errorf("RAW file exists = %v, want %v", exists, !tt.wantRawDel)
+			}
+		})
+	}
+}
+
+func TestProcess_IgnoresExtensionCase(t *testing.T) {
+	tmpDir := t.TempDir()
+	jpgPath := filepath.Join(tmpDir, "test.JPG")
+	rawPath := filepath.Join(tmpDir, "raw", "test.RAF")
+	if err := createTestFiles(t, jpgPath, rawPath, 1); err != nil {
+		t.Fatalf("Setup failed: %v", err)
+	}
+
+	cfg := config.NewDefaultConfig()
+	cfg.Files.JpegExtension = ".jpg"
+	cfg.Files.RawExtension = ".raf"
+
+	proc, _, _ := newTestProcessor(tmpDir, cfg, false)
+	if err := proc.Process(); err != nil {
+		t.Fatalf("Process() error = %v", err)
+	}
+
+	// Rating 1 deletes both files
+	if checkFileExists(t, jpgPath) {
+		t.Errorf("JPEG file still exists, want deleted")
+	}
+	if checkFileExists(t, rawPath) {
+		t.Errorf("RAW file still exists, want deleted")
+	}
+}
+
+func TestProgressBars(t *testing.T) {
+	tmpDir := t.TempDir()
+	for name, rating := range map[string]int{"img1": 1, "img2": 2, "img3": 3} {
+		jpgPath := filepath.Join(tmpDir, name+".JPG")
+		rawPath := filepath.Join(tmpDir, "raw", name+".RAF")
 		if err := createTestFiles(t, jpgPath, rawPath, rating); err != nil {
 			t.Fatalf("Failed to create test files: %v", err)
 		}
 	}
 
-	// Initialize Processor with temporary directory
-	proc := &ImageProcessor{
-		RootDir: tmpDir,
-		Config:  config.NewDefaultConfig(),
-		Verbose: false,
-	}
-
-	// Process files
+	proc, _, _ := newTestProcessor(tmpDir, config.NewDefaultConfig(), false)
 	if err := proc.Process(); err != nil {
 		t.Fatalf("Process() error = %v", err)
 	}
 
-	// Check counter
-	if proc.counter.JpegCount != 3 {
-		t.Errorf("Expected 3 JPEGs, got %d", proc.counter.JpegCount)
+	if proc.jpegCount != 3 {
+		t.Errorf("Expected 3 JPEGs, got %d", proc.jpegCount)
 	}
-	if proc.counter.RawCount != 3 {
-		t.Errorf("Expected 3 RAWs, got %d", proc.counter.RawCount)
-	}
-}
-
-func TestVerboseLogging(t *testing.T) {
-	proc := &ImageProcessor{
-		RootDir: t.TempDir(),
-		Config:  config.NewDefaultConfig(),
-		Verbose: true,
-	}
-
-	// Initialize progress bars before testing logging
-	proc.counter = &counter.FileCounter{}
-	proc.jpegBar = progressbar.NewOptions(0)
-	proc.rawBar = progressbar.NewOptions(0)
-
-	old := os.Stdout
-	r, w, _ := os.Pipe()
-	os.Stdout = w
-
-	proc.logf("Test message %d", 42)
-
-	w.Close()
-	os.Stdout = old
-
-	var buf bytes.Buffer
-	io.Copy(&buf, r)
-
-	if !strings.Contains(buf.String(), "Test message 42") {
-		t.Error("Expected log message not found in output")
+	if proc.rawCount != 3 {
+		t.Errorf("Expected 3 RAWs, got %d", proc.rawCount)
 	}
 }
 
-func TestEnglishMessages(t *testing.T) {
-	proc := &ImageProcessor{
-		RootDir: t.TempDir(),
-		Config:  config.NewDefaultConfig(),
-		Verbose: true,
+func TestProgressBars_CountOnlyProcessedFiles(t *testing.T) {
+	tmpDir := t.TempDir()
+	if err := createTestFiles(t, filepath.Join(tmpDir, "img1.JPG"), filepath.Join(tmpDir, "raw", "img1.RAF"), 3); err != nil {
+		t.Fatalf("Setup failed: %v", err)
+	}
+	// Directory without RAW folder is not processed
+	createFile(t, filepath.Join(tmpDir, "export", "img2.JPG"))
+	createFile(t, filepath.Join(tmpDir, "export", "img2.RAF"))
+
+	proc, _, _ := newTestProcessor(tmpDir, config.NewDefaultConfig(), false)
+	if err := proc.Process(); err != nil {
+		t.Fatalf("Process() error = %v", err)
 	}
 
-	// Initialize progress bars
-	proc.jpegBar = progressbar.NewOptions(1)
-	proc.rawBar = progressbar.NewOptions(1)
+	if proc.jpegCount != 1 || proc.rawCount != 1 {
+		t.Errorf("Counted %d JPEGs and %d RAWs, want 1 and 1", proc.jpegCount, proc.rawCount)
+	}
+}
 
-	// Capture stdout
-	old := os.Stdout
-	r, w, _ := os.Pipe()
-	os.Stdout = w
+func TestProcess_SkipsHiddenDirectories(t *testing.T) {
+	tests := []struct {
+		name    string
+		sameDir bool
+		rawPath string
+	}{
+		{"RAW folder below hidden directory", false, filepath.Join(".hidden", "shoot", "raw", "orphan.RAF")},
+		{"Same directory below hidden directory", true, filepath.Join(".hidden", "shoot", "orphan.RAF")},
+	}
 
-	proc.logf("Test message %d", 42)
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			tmpDir := t.TempDir()
+			rawPath := filepath.Join(tmpDir, tt.rawPath)
+			createFile(t, rawPath)
 
-	w.Close()
-	os.Stdout = old
+			cfg := config.NewDefaultConfig()
+			cfg.Files.SameDir = tt.sameDir
 
-	var buf bytes.Buffer
-	io.Copy(&buf, r)
+			proc, _, _ := newTestProcessor(tmpDir, cfg, false)
+			if err := proc.Process(); err != nil {
+				t.Fatalf("Process() error = %v", err)
+			}
 
-	if !strings.Contains(buf.String(), "Test message 42") {
-		t.Error("Expected log message not found in output")
+			if !checkFileExists(t, rawPath) {
+				t.Error("RAW file in hidden directory was deleted")
+			}
+		})
+	}
+}
+
+func TestProcess_SameDirWithDotAsRoot(t *testing.T) {
+	tmpDir := t.TempDir()
+	rawPath := filepath.Join(tmpDir, "orphan.RAF")
+	createFile(t, rawPath)
+	oldWd, err := os.Getwd()
+	if err != nil {
+		t.Fatalf("Setup failed: %v", err)
+	}
+	if err := os.Chdir(tmpDir); err != nil {
+		t.Fatalf("Setup failed: %v", err)
+	}
+	t.Cleanup(func() { os.Chdir(oldWd) })
+
+	cfg := config.NewDefaultConfig()
+	cfg.Files.SameDir = true
+
+	proc, _, _ := newTestProcessor(".", cfg, false)
+	if err := proc.Process(); err != nil {
+		t.Fatalf("Process() error = %v", err)
+	}
+
+	if checkFileExists(t, rawPath) {
+		t.Error("Orphaned RAW in root directory was not processed")
+	}
+}
+
+func TestLogging_InfoOnlyInVerboseMode(t *testing.T) {
+	for _, verbose := range []bool{true, false} {
+		proc, out, _ := newTestProcessor(t.TempDir(), config.NewDefaultConfig(), verbose)
+		proc.infof("Test message %d\n", 42)
+
+		if got := strings.Contains(out.String(), "Test message 42"); got != verbose {
+			t.Errorf("verbose=%v: message shown = %v, want %v", verbose, got, verbose)
+		}
+	}
+}
+
+func TestLogging_WarningsAlwaysShown(t *testing.T) {
+	tmpDir := t.TempDir()
+	jpgPath := filepath.Join(tmpDir, "corrupt.JPG")
+	if err := os.WriteFile(jpgPath, []byte("not a jpeg"), 0644); err != nil {
+		t.Fatalf("Setup failed: %v", err)
+	}
+	createFile(t, filepath.Join(tmpDir, "raw", "corrupt.RAF"))
+
+	proc, _, errOut := newTestProcessor(tmpDir, config.NewDefaultConfig(), false)
+	if err := proc.Process(); err != nil {
+		t.Fatalf("Process() error = %v", err)
+	}
+
+	if !strings.Contains(errOut.String(), jpgPath) {
+		t.Errorf("Warning for unreadable JPEG not shown, got %q", errOut.String())
+	}
+}
+
+func TestLogging_UnratedJpegIsNoWarning(t *testing.T) {
+	tmpDir := t.TempDir()
+	jpgPath := filepath.Join(tmpDir, "unrated.JPG")
+	rawPath := filepath.Join(tmpDir, "raw", "unrated.RAF")
+	if err := testutils.CreateEmptyJPEG(t, jpgPath); err != nil {
+		t.Fatalf("Setup failed: %v", err)
+	}
+	createFile(t, rawPath)
+
+	proc, out, errOut := newTestProcessor(tmpDir, config.NewDefaultConfig(), true)
+	if err := proc.Process(); err != nil {
+		t.Fatalf("Process() error = %v", err)
+	}
+
+	if errOut.Len() != 0 {
+		t.Errorf("Unexpected warning for unrated JPEG: %q", errOut.String())
+	}
+	if !strings.Contains(out.String(), "no rating") {
+		t.Errorf("Info for unrated JPEG not shown, got %q", out.String())
+	}
+	if !checkFileExists(t, jpgPath) || !checkFileExists(t, rawPath) {
+		t.Error("Unrated files were deleted")
+	}
+}
+
+func TestProgressBars_CompleteWhenRawsDeletedByRating(t *testing.T) {
+	tmpDir := t.TempDir()
+	// Rating 1 deletes the RAW while processing the JPEGs
+	if err := createTestFiles(t, filepath.Join(tmpDir, "img1.JPG"), filepath.Join(tmpDir, "raw", "img1.RAF"), 1); err != nil {
+		t.Fatalf("Setup failed: %v", err)
+	}
+	if err := createTestFiles(t, filepath.Join(tmpDir, "img3.JPG"), filepath.Join(tmpDir, "raw", "img3.RAF"), 3); err != nil {
+		t.Fatalf("Setup failed: %v", err)
+	}
+
+	proc, _, _ := newTestProcessor(tmpDir, config.NewDefaultConfig(), false)
+	if err := proc.Process(); err != nil {
+		t.Fatalf("Process() error = %v", err)
+	}
+
+	for name, bar := range map[string]interface{ State() progressbar.State }{"JPEG": proc.jpegBar, "RAW": proc.rawBar} {
+		if state := bar.State(); state.CurrentNum != state.Max {
+			t.Errorf("%s progress bar at %d/%d, want complete", name, state.CurrentNum, state.Max)
+		}
+	}
+}
+
+func TestProcess_DryRunChangesNothing(t *testing.T) {
+	tmpDir := t.TempDir()
+	deletePair := [2]string{filepath.Join(tmpDir, "img1.JPG"), filepath.Join(tmpDir, "raw", "img1.RAF")}
+	compressPair := [2]string{filepath.Join(tmpDir, "img2.JPG"), filepath.Join(tmpDir, "raw", "img2.RAF")}
+	orphanPath := filepath.Join(tmpDir, "raw", "orphan.RAF")
+	if err := createTestFiles(t, deletePair[0], deletePair[1], 1); err != nil {
+		t.Fatalf("Setup failed: %v", err)
+	}
+	if err := createTestFiles(t, compressPair[0], compressPair[1], 2); err != nil {
+		t.Fatalf("Setup failed: %v", err)
+	}
+	createFile(t, orphanPath)
+	compressedBefore, err := os.ReadFile(compressPair[0])
+	if err != nil {
+		t.Fatalf("Setup failed: %v", err)
+	}
+
+	cfg := config.NewDefaultConfig()
+	cfg.Process.TargetMegapixels = 0.001 // the 100x100 test image would be resized
+
+	proc, out, _ := newTestProcessor(tmpDir, cfg, false)
+	proc.DryRun = true
+	if err := proc.Process(); err != nil {
+		t.Fatalf("Process() error = %v", err)
+	}
+
+	for _, path := range []string{deletePair[0], deletePair[1], compressPair[0], compressPair[1], orphanPath} {
+		if !checkFileExists(t, path) {
+			t.Errorf("%s was deleted in dry run", path)
+		}
+	}
+	compressedAfter, err := os.ReadFile(compressPair[0])
+	if err != nil {
+		t.Fatalf("Failed to read JPEG: %v", err)
+	}
+	if !bytes.Equal(compressedBefore, compressedAfter) {
+		t.Error("JPEG was compressed in dry run")
+	}
+
+	for _, want := range []string{
+		"[dry-run] Would delete RAW " + deletePair[1],
+		"[dry-run] Would delete JPEG " + deletePair[0],
+		"[dry-run] Would delete RAW " + compressPair[1],
+		"[dry-run] Would compress JPEG " + compressPair[0],
+		"[dry-run] Would delete RAW " + orphanPath,
+	} {
+		if !strings.Contains(out.String(), want) {
+			t.Errorf("Output does not contain %q:\n%s", want, out.String())
+		}
+	}
+}
+
+func TestProcess_FindsCounterpartWithDifferentExtensionCase(t *testing.T) {
+	tmpDir := t.TempDir()
+	jpgPath := filepath.Join(tmpDir, "img.JPG")
+	rawPath := filepath.Join(tmpDir, "raw", "img.raf") // config uses ".RAF"
+	if err := createTestFiles(t, jpgPath, rawPath, 1); err != nil {
+		t.Fatalf("Setup failed: %v", err)
+	}
+
+	proc, _, _ := newTestProcessor(tmpDir, config.NewDefaultConfig(), false)
+	if err := proc.Process(); err != nil {
+		t.Fatalf("Process() error = %v", err)
+	}
+
+	// Rating 1 deletes both files
+	if checkFileExists(t, jpgPath) || checkFileExists(t, rawPath) {
+		t.Error("JPEG/RAW pair with different extension case was not processed")
 	}
 }
