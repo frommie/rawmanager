@@ -159,3 +159,31 @@ ratingActions:
 		t.Errorf("LoadConfig() error = %q, want it to name rating 2", err)
 	}
 }
+
+func TestLoadConfig_RejectsInvalidProcessSettings(t *testing.T) {
+	tests := []struct {
+		name string
+		yaml string
+	}{
+		{"JPEG quality 0", "process:\n  jpegQuality: 0\n"},
+		{"JPEG quality above 100", "process:\n  jpegQuality: 101\n"},
+		{"Target megapixels 0", "process:\n  targetMegapixels: 0\n"},
+		{"Negative target megapixels", "process:\n  targetMegapixels: -1\n"},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if _, err := LoadConfig(writeConfig(t, tt.yaml)); err == nil {
+				t.Error("LoadConfig() error = nil, want error")
+			}
+		})
+	}
+}
+
+func TestLoadConfig_AcceptsProcessSettingLimits(t *testing.T) {
+	for _, yaml := range []string{"process:\n  jpegQuality: 1\n", "process:\n  jpegQuality: 100\n", "process:\n  targetMegapixels: 0.5\n"} {
+		if _, err := LoadConfig(writeConfig(t, yaml)); err != nil {
+			t.Errorf("LoadConfig(%q) error = %v", yaml, err)
+		}
+	}
+}

@@ -81,7 +81,7 @@ files:
 # Process Configuration
 process:
   targetMegapixels: 10.0 # Target size for JPEG compression
-  jpegQuality: 95        # JPEG quality (0-100)
+  jpegQuality: 95        # JPEG quality (1-100)
 ```
 
 ## Requirements

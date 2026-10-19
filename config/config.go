@@ -55,7 +55,7 @@ func hasExtension(name, ext string) bool {
 
 type ProcessConfig struct {
 	TargetMegapixels float64 `yaml:"targetMegapixels"` // Target size for JPEG compression
-	JpegQuality      int     `yaml:"jpegQuality"`      // JPEG quality (0-100)
+	JpegQuality      int     `yaml:"jpegQuality"`      // JPEG quality (1-100)
 }
 
 type Config struct {
@@ -83,6 +83,13 @@ func (c *Config) Validate() error {
 	}
 	if c.Files.JpegExtension == "" {
 		return fmt.Errorf("JPEG extension must not be empty")
+	}
+
+	if c.Process.JpegQuality < 1 || c.Process.JpegQuality > 100 {
+		return fmt.Errorf("invalid JPEG quality %d: must be between 1 and 100", c.Process.JpegQuality)
+	}
+	if c.Process.TargetMegapixels <= 0 {
+		return fmt.Errorf("invalid target megapixels %g: must be greater than 0", c.Process.TargetMegapixels)
 	}
 
 	// Deleting the JPEG implies deleting the RAW; otherwise the remaining RAW would be handled by the NoJpegAction
