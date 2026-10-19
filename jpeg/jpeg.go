@@ -13,48 +13,12 @@ import (
 )
 
 const (
-	// XmpNamespace defines the namespace for Adobe XMP metadata
-	xmpNamespace = "http://ns.adobe.com/xap/1.0/"
-
 	// app0MarkerId is the marker for APP0 (JFIF) segments in JPEG files
 	app0MarkerId = 0xE0
 
 	// app1MarkerId is the marker for APP1 segments in JPEG files (EXIF and XMP)
 	app1MarkerId = 0xE1
 )
-
-// GetRatingFromFile reads the rating from a JPEG file
-func GetRatingFromFile(jpgPath string, cfg *config.Config) (int, error) {
-	switch cfg.Xmp.Mode {
-	case config.XmpModeEmbedded:
-		// Read embedded XMP data from JPEG
-		file, err := os.Open(jpgPath)
-		if err != nil {
-			return 0, err
-		}
-		defer file.Close()
-
-		xmpData, err := xmp.ExtractXmpData(file)
-		if err != nil {
-			return 0, err
-		}
-
-		return xmp.GetRating(xmpData)
-
-	case config.XmpModeSeparate:
-		// Read separate .xmp file
-		xmpPath := jpgPath[:len(jpgPath)-len(filepath.Ext(jpgPath))] + ".xmp"
-		return xmp.GetRatingFromFile(xmpPath)
-
-	case config.XmpModeSeparateExt:
-		// Read .jpg.xmp file
-		xmpPath := jpgPath + ".xmp"
-		return xmp.GetRatingFromFile(xmpPath)
-
-	default:
-		return 0, fmt.Errorf("Invalid XMP mode: %s", cfg.Xmp.Mode)
-	}
-}
 
 // ResizeResult describes the outcome of ResizeWithXMP
 type ResizeResult struct {
@@ -122,7 +86,7 @@ func parseSegments(data []byte) ([]*jpegstructure.Segment, error) {
 func extractMetadata(segments []*jpegstructure.Segment) (exifSegment, xmpSegment *jpegstructure.Segment) {
 	for _, segment := range segments {
 		if segment.MarkerId == app1MarkerId {
-			if bytes.HasPrefix(segment.Data, []byte(xmpNamespace)) {
+			if xmp.IsXmpSegment(segment) {
 				xmpSegment = segment
 			} else {
 				exifSegment = segment

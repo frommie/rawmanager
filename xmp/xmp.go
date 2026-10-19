@@ -4,10 +4,20 @@ import (
 	"bytes"
 	"encoding/xml"
 	"fmt"
-	"io"
 	"os"
+	"path/filepath"
+	"strings"
 
 	"github.com/dsoprea/go-jpeg-image-structure/v2"
+	"github.com/frommie/rawmanager/config"
+)
+
+const (
+	// namespace identifies APP1 segments containing XMP data
+	namespace = "http://ns.adobe.com/xap/1.0/"
+
+	// app1MarkerId is the marker for APP1 segments in JPEG files
+	app1MarkerId = 0xE1
 )
 
 type XmpMeta struct {
@@ -22,48 +32,53 @@ type XmpMeta struct {
 	} `xml:"RDF"`
 }
 
-// ExtractXmpData extracts XMP data from a file
-func ExtractXmpData(file *os.File) ([]byte, error) {
-	data, err := io.ReadAll(file)
-	if err != nil {
-		return nil, fmt.Errorf("Error reading file: %v", err)
-	}
+// ReadRating reads the rating of a JPEG file from the XMP source selected by mode
+func ReadRating(jpgPath string, mode config.XmpMode) (int, error) {
+	switch mode {
+	case config.XmpModeEmbedded:
+		data, err := os.ReadFile(jpgPath)
+		if err != nil {
+			return 0, err
+		}
+		xmpData, err := ExtractXmpData(data)
+		if err != nil {
+			return 0, err
+		}
+		return GetRating(xmpData)
 
-	jmp := jpegstructure.NewJpegMediaParser()
-	intfc, err := jmp.ParseBytes(data)
+	case config.XmpModeSeparate:
+		// IMG.JPG -> IMG.xmp
+		return GetRatingFromSidecar(strings.TrimSuffix(jpgPath, filepath.Ext(jpgPath)) + ".xmp")
+
+	case config.XmpModeSeparateExt:
+		// IMG.JPG -> IMG.JPG.xmp
+		return GetRatingFromSidecar(jpgPath + ".xmp")
+
+	default:
+		return 0, fmt.Errorf("Invalid XMP mode: %s", mode)
+	}
+}
+
+// IsXmpSegment reports whether a JPEG segment is an APP1 segment containing XMP data
+func IsXmpSegment(segment *jpegstructure.Segment) bool {
+	return segment.MarkerId == app1MarkerId && bytes.HasPrefix(segment.Data, []byte(namespace))
+}
+
+// ExtractXmpData extracts the XMP packet from JPEG data
+func ExtractXmpData(jpegData []byte) ([]byte, error) {
+	intfc, err := jpegstructure.NewJpegMediaParser().ParseBytes(jpegData)
 	if err != nil {
 		return nil, fmt.Errorf("Error parsing JPEG file: %v", err)
 	}
 
-	// Get list of segments
-	sl := intfc.(*jpegstructure.SegmentList)
-	var xmpData []byte
-
-	// Search for the APP1 segment with XMP data
-	for _, segment := range sl.Segments() {
-		if segment.MarkerId == 0xE1 { // APP1 marker ID is 0xE1
-			payload := segment.Data
-			if bytes.HasPrefix(payload, []byte("http://ns.adobe.com/xap/1.0/")) {
-				// Remove all null bytes from the data
-				cleanData := bytes.Map(func(r rune) rune {
-					if r == 0 {
-						return -1
-					}
-					return r
-				}, payload[len("http://ns.adobe.com/xap/1.0/"):])
-
-				// Remove whitespace at the beginning and end
-				xmpData = bytes.TrimSpace(cleanData)
-				break
-			}
+	for _, segment := range intfc.(*jpegstructure.SegmentList).Segments() {
+		if IsXmpSegment(segment) {
+			// The payload is the namespace, a null byte and the XMP packet
+			return bytes.Trim(segment.Data[len(namespace):], "\x00 \t\r\n"), nil
 		}
 	}
 
-	if xmpData == nil {
-		return nil, fmt.Errorf("No XMP data found")
-	}
-
-	return xmpData, nil
+	return nil, fmt.Errorf("No XMP data found")
 }
 
 // GetRating reads the rating from XMP data
@@ -116,7 +131,8 @@ func firstNonEmpty(values ...string) string {
 	return ""
 }
 
-func GetRatingFromFile(xmpPath string) (int, error) {
+// GetRatingFromSidecar reads the rating from a separate XMP file
+func GetRatingFromSidecar(xmpPath string) (int, error) {
 	data, err := os.ReadFile(xmpPath)
 	if err != nil {
 		return 0, fmt.Errorf("Error reading XMP file: %v", err)

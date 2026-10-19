@@ -5,9 +5,12 @@ import (
 	"os"
 	"path/filepath"
 	"testing"
+
+	"github.com/frommie/rawmanager/config"
+	"github.com/frommie/rawmanager/testutils"
 )
 
-func TestGetRatingFromFile(t *testing.T) {
+func TestGetRatingFromSidecar(t *testing.T) {
 	tests := []struct {
 		name      string
 		setupFunc func(string) (string, error)
@@ -46,13 +49,13 @@ func TestGetRatingFromFile(t *testing.T) {
 			}
 
 			// Execute tests
-			got, err := GetRatingFromFile(xmpPath)
+			got, err := GetRatingFromSidecar(xmpPath)
 			if (err != nil) != tt.wantErr {
-				t.Errorf("GetRatingFromFile() error = %v, wantErr %v", err, tt.wantErr)
+				t.Errorf("GetRatingFromSidecar() error = %v, wantErr %v", err, tt.wantErr)
 				return
 			}
 			if err == nil && got != tt.want {
-				t.Errorf("GetRatingFromFile() = %v, want %v", got, tt.want)
+				t.Errorf("GetRatingFromSidecar() = %v, want %v", got, tt.want)
 			}
 		})
 	}
@@ -90,6 +93,74 @@ func TestGetRating(t *testing.T) {
 				t.Errorf("GetRating() = %v, want %v", got, tt.want)
 			}
 		})
+	}
+}
+
+func TestReadRating(t *testing.T) {
+	tests := []struct {
+		name  string
+		mode  config.XmpMode
+		setup func(t *testing.T, dir string) error
+	}{
+		{
+			name: "Embedded XMP",
+			mode: config.XmpModeEmbedded,
+			setup: func(t *testing.T, dir string) error {
+				return testutils.CreateTestJPEGWithEmbeddedXMP(t, filepath.Join(dir, "img.JPG"), 4)
+			},
+		},
+		{
+			name: "Separate .xmp file",
+			mode: config.XmpModeSeparate,
+			setup: func(t *testing.T, dir string) error {
+				return CreateTestXMP(filepath.Join(dir, "img.xmp"), 4)
+			},
+		},
+		{
+			name: "Separate .JPG.xmp file",
+			mode: config.XmpModeSeparateExt,
+			setup: func(t *testing.T, dir string) error {
+				return CreateTestXMP(filepath.Join(dir, "img.JPG.xmp"), 4)
+			},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			dir := t.TempDir()
+			if err := tt.setup(t, dir); err != nil {
+				t.Fatalf("Setup failed: %v", err)
+			}
+
+			got, err := ReadRating(filepath.Join(dir, "img.JPG"), tt.mode)
+			if err != nil {
+				t.Fatalf("ReadRating() error = %v", err)
+			}
+			if got != 4 {
+				t.Errorf("ReadRating() = %v, want 4", got)
+			}
+		})
+	}
+}
+
+func TestReadRating_InvalidMode(t *testing.T) {
+	if _, err := ReadRating("img.JPG", "invalid"); err == nil {
+		t.Error("ReadRating() error = nil, want error")
+	}
+}
+
+func TestExtractXmpData_NoXmp(t *testing.T) {
+	jpgPath := filepath.Join(t.TempDir(), "img.jpg")
+	if err := testutils.CreateEmptyJPEG(t, jpgPath); err != nil {
+		t.Fatalf("Setup failed: %v", err)
+	}
+	data, err := os.ReadFile(jpgPath)
+	if err != nil {
+		t.Fatalf("Setup failed: %v", err)
+	}
+
+	if _, err := ExtractXmpData(data); err == nil {
+		t.Error("ExtractXmpData() error = nil, want error")
 	}
 }
 

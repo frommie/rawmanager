@@ -11,32 +11,8 @@ import (
 	"github.com/disintegration/imaging"
 	"github.com/frommie/rawmanager/config"
 	"github.com/frommie/rawmanager/testutils"
+	"github.com/frommie/rawmanager/xmp"
 )
-
-func TestGetRatingFromFile(t *testing.T) {
-	tmpDir := t.TempDir()
-	jpgPath := filepath.Join(tmpDir, "test.jpg")
-
-	// Create valid JPEG with XMP
-	if err := testutils.CreateTestJPEGWithEmbeddedXMP(t, jpgPath, 4); err != nil {
-		t.Fatalf("Failed to create test JPEG: %v", err)
-	}
-
-	// Create test configuration
-	cfg := &config.Config{
-		Xmp: config.XmpConfig{
-			Mode: config.XmpModeEmbedded,
-		},
-	}
-
-	got, err := GetRatingFromFile(jpgPath, cfg)
-	if err != nil {
-		t.Errorf("GetRatingFromFile() error = %v", err)
-	}
-	if got != 4 {
-		t.Errorf("GetRatingFromFile() = %v, want 4", got)
-	}
-}
 
 func TestResizeWithXMP_SmallImageIsUnchanged(t *testing.T) {
 	jpgPath := filepath.Join(t.TempDir(), "test.jpg")
@@ -106,7 +82,7 @@ func TestResizeWithXMP_DownsizesLargeImage(t *testing.T) {
 		t.Errorf("Image on disk is %dx%d, want %dx%d", w, h, result.Width, result.Height)
 	}
 
-	rating, err := GetRatingFromFile(jpgPath, cfg)
+	rating, err := xmp.ReadRating(jpgPath, cfg.Xmp.Mode)
 	if err != nil {
 		t.Fatalf("XMP not preserved: %v", err)
 	}

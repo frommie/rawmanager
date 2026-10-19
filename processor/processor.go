@@ -6,6 +6,7 @@ import (
 	"github.com/frommie/rawmanager/config"
 	"github.com/frommie/rawmanager/counter"
 	"github.com/frommie/rawmanager/jpeg"
+	"github.com/frommie/rawmanager/xmp"
 	"github.com/schollz/progressbar/v3"
 	"os"
 	"path/filepath"
@@ -101,7 +102,7 @@ func (p *ImageProcessor) ProcessJPEG(jpgPath, rawPath string) error {
 	}
 
 	// Get rating from JPEG or XMP file
-	rating, err := jpeg.GetRatingFromFile(jpgPath, p.Config)
+	rating, err := xmp.ReadRating(jpgPath, p.Config.Xmp.Mode)
 	if err != nil {
 		return fmt.Errorf("Error reading rating: %v", err)
 	}
