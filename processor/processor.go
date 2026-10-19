@@ -129,8 +129,14 @@ func (p *ImageProcessor) ProcessJPEG(jpgPath, rawPath string) error {
 
 	if action.CompressJpeg {
 		p.logf("Compressing JPEG %s (Rating %d)\n", jpgPath, rating)
-		if err := jpeg.ResizeWithXMP(jpgPath, p.Config, p.Verbose); err != nil {
+		result, err := jpeg.ResizeWithXMP(jpgPath, p.Config.Process)
+		if err != nil {
 			return err
+		}
+		if result.Resized {
+			p.logf("Image %s resized to %dx%d pixels (EXIF and XMP data preserved)\n", jpgPath, result.Width, result.Height)
+		} else {
+			p.logf("Image %s is already small enough (%dx%d pixels)\n", jpgPath, result.Width, result.Height)
 		}
 	}
 

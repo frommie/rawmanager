@@ -1,6 +1,7 @@
 package jpeg
 
 import (
+	"bytes"
 	"fmt"
 	"image/color"
 	"os"
@@ -37,58 +38,36 @@ func TestGetRatingFromFile(t *testing.T) {
 	}
 }
 
-func TestResizeWithXMP(t *testing.T) {
-	tests := []struct {
-		name      string
-		setupFunc func(t *testing.T, dir string) (string, error)
-		wantErr   bool
-	}{
-		{
-			name: "Successful downsizing",
-			setupFunc: func(t *testing.T, dir string) (string, error) {
-				path := filepath.Join(dir, "test.jpg")
-				if err := createTestJPEGWithRating(t, path, 4); err != nil {
-					return "", err
-				}
-				return path, nil
-			},
-			wantErr: false,
-		},
-		{
-			name: "Non-existing file",
-			setupFunc: func(t *testing.T, dir string) (string, error) {
-				return filepath.Join(dir, "nonexistent.jpg"), nil
-			},
-			wantErr: true,
-		},
+func TestResizeWithXMP_SmallImageIsUnchanged(t *testing.T) {
+	jpgPath := filepath.Join(t.TempDir(), "test.jpg")
+	if err := createTestJPEGWithRating(t, jpgPath, 4); err != nil {
+		t.Fatalf("Setup failed: %v", err)
+	}
+	original, err := os.ReadFile(jpgPath)
+	if err != nil {
+		t.Fatalf("Setup failed: %v", err)
 	}
 
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			tmpDir := t.TempDir()
-			jpgPath, err := tt.setupFunc(t, tmpDir)
-			if err != nil {
-				t.Fatalf("Error during test setup: %v", err)
-			}
+	result, err := ResizeWithXMP(jpgPath, config.NewDefaultConfig().Process)
+	if err != nil {
+		t.Fatalf("ResizeWithXMP() error = %v", err)
+	}
+	if result.Resized {
+		t.Errorf("ResizeWithXMP() resized a %dx%d image, want unchanged", result.Width, result.Height)
+	}
 
-			// Create test configuration
-			cfg := &config.Config{
-				Process: config.ProcessConfig{
-					TargetMegapixels: 10.0,
-					JpegQuality:      95,
-				},
-				Files: config.FileConfig{
-					JpegExtension: ".JPG",
-					RawExtension:  ".RAF",
-				},
-			}
+	after, err := os.ReadFile(jpgPath)
+	if err != nil {
+		t.Fatalf("Failed to read image: %v", err)
+	}
+	if !bytes.Equal(original, after) {
+		t.Error("Small image was rewritten, want unchanged file")
+	}
+}
 
-			// Call ResizeWithXMP with Verbose parameter
-			err = ResizeWithXMP(jpgPath, cfg, false)
-			if (err != nil) != tt.wantErr {
-				t.Errorf("ResizeWithXMP() error = %v, wantErr %v", err, tt.wantErr)
-			}
-		})
+func TestResizeWithXMP_NonExistingFile(t *testing.T) {
+	if _, err := ResizeWithXMP(filepath.Join(t.TempDir(), "nonexistent.jpg"), config.NewDefaultConfig().Process); err == nil {
+		t.Error("ResizeWithXMP() error = nil, want error")
 	}
 }
 
@@ -104,20 +83,27 @@ func TestResizeWithXMP_DownsizesLargeImage(t *testing.T) {
 	if err := testutils.EmbedXMP(t, jpgPath, 2); err != nil {
 		t.Fatalf("Setup failed: %v", err)
 	}
+	if err := os.Chmod(jpgPath, 0640); err != nil {
+		t.Fatalf("Setup failed: %v", err)
+	}
 
 	cfg := config.NewDefaultConfig()
 	cfg.Process.TargetMegapixels = 1.0
 
-	if err := ResizeWithXMP(jpgPath, cfg, false); err != nil {
+	result, err := ResizeWithXMP(jpgPath, cfg.Process)
+	if err != nil {
 		t.Fatalf("ResizeWithXMP() error = %v", err)
+	}
+	if !result.Resized || result.Width*result.Height > 1000000 {
+		t.Errorf("ResizeWithXMP() = %+v, want resized to at most 1 MP", result)
 	}
 
 	resized, err := imaging.Open(jpgPath)
 	if err != nil {
 		t.Fatalf("Failed to open resized image: %v", err)
 	}
-	if w, h := resized.Bounds().Dx(), resized.Bounds().Dy(); w*h > 1000000 {
-		t.Errorf("Image not downsized: %dx%d", w, h)
+	if w, h := resized.Bounds().Dx(), resized.Bounds().Dy(); w != result.Width || h != result.Height {
+		t.Errorf("Image on disk is %dx%d, want %dx%d", w, h, result.Width, result.Height)
 	}
 
 	rating, err := GetRatingFromFile(jpgPath, cfg)
@@ -126,6 +112,14 @@ func TestResizeWithXMP_DownsizesLargeImage(t *testing.T) {
 	}
 	if rating != 2 {
 		t.Errorf("Rating after resize = %d, want 2", rating)
+	}
+
+	info, err := os.Stat(jpgPath)
+	if err != nil {
+		t.Fatalf("Failed to stat image: %v", err)
+	}
+	if info.Mode().Perm() != 0640 {
+		t.Errorf("File mode after resize = %v, want 0640", info.Mode().Perm())
 	}
 
 	entries, _ := os.ReadDir(tmpDir)
