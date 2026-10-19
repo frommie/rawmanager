@@ -13,6 +13,7 @@ A tool to manage RAW image files based on their corresponding JPEG ratings.
 - Resizing preserves EXIF and XMP data
 - Supports embedded and separate XMP metadata
 - Configurable actions for each rating level
+- Dry-run mode to preview all actions
 - Progress bars and detailed logging (optional)
 
 ## Installation
@@ -34,17 +35,18 @@ go install
 ## Usage
 
 ```bash
-rawmanager [-config path/to/config.yaml] [-v] [directory]
+rawmanager [-config path/to/config.yaml] [-v] [-dry-run] [directory]
 ```
 
 Options:
 - `-config`: Path to configuration file (default: built-in configuration, see below)
 - `-v`: Verbose output
+- `-dry-run`: Only show what would be done without changing any files
 - `directory`: Directory to process (default: current directory)
 
 ## Configuration
 
-Create a `config.yaml` file to customize the behavior and pass it with `-config`. Settings missing in your file keep their default values; if you specify `ratingActions`, only the ratings listed there have an action. The [default config](config.yaml) is as follows:
+Create a `config.yaml` file to customize the behavior and pass it with `-config`. Settings missing in your file keep their default values; if you specify `ratingActions`, only the ratings listed there have an action. Deleting the JPEG requires deleting the RAW as well (`deleteJpeg: true` needs `deleteRaw: true`). Hidden directories are skipped. The [default config](config.yaml) is as follows:
 
 ```yaml
 # Rating Actions (0-5)

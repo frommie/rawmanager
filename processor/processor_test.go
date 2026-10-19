@@ -419,3 +419,55 @@ func TestProgressBars_CompleteWhenRawsDeletedByRating(t *testing.T) {
 		}
 	}
 }
+
+func TestProcess_DryRunChangesNothing(t *testing.T) {
+	tmpDir := t.TempDir()
+	deletePair := [2]string{filepath.Join(tmpDir, "img1.JPG"), filepath.Join(tmpDir, "raw", "img1.RAF")}
+	compressPair := [2]string{filepath.Join(tmpDir, "img2.JPG"), filepath.Join(tmpDir, "raw", "img2.RAF")}
+	orphanPath := filepath.Join(tmpDir, "raw", "orphan.RAF")
+	if err := createTestFiles(t, deletePair[0], deletePair[1], 1); err != nil {
+		t.Fatalf("Setup failed: %v", err)
+	}
+	if err := createTestFiles(t, compressPair[0], compressPair[1], 2); err != nil {
+		t.Fatalf("Setup failed: %v", err)
+	}
+	createFile(t, orphanPath)
+	compressedBefore, err := os.ReadFile(compressPair[0])
+	if err != nil {
+		t.Fatalf("Setup failed: %v", err)
+	}
+
+	cfg := config.NewDefaultConfig()
+	cfg.Process.TargetMegapixels = 0.001 // the 100x100 test image would be resized
+
+	proc, out, _ := newTestProcessor(tmpDir, cfg, false)
+	proc.DryRun = true
+	if err := proc.Process(); err != nil {
+		t.Fatalf("Process() error = %v", err)
+	}
+
+	for _, path := range []string{deletePair[0], deletePair[1], compressPair[0], compressPair[1], orphanPath} {
+		if !checkFileExists(t, path) {
+			t.Errorf("%s was deleted in dry run", path)
+		}
+	}
+	compressedAfter, err := os.ReadFile(compressPair[0])
+	if err != nil {
+		t.Fatalf("Failed to read JPEG: %v", err)
+	}
+	if !bytes.Equal(compressedBefore, compressedAfter) {
+		t.Error("JPEG was compressed in dry run")
+	}
+
+	for _, want := range []string{
+		"[dry-run] Would delete RAW " + deletePair[1],
+		"[dry-run] Would delete JPEG " + deletePair[0],
+		"[dry-run] Would delete RAW " + compressPair[1],
+		"[dry-run] Would compress JPEG " + compressPair[0],
+		"[dry-run] Would delete RAW " + orphanPath,
+	} {
+		if !strings.Contains(out.String(), want) {
+			t.Errorf("Output does not contain %q:\n%s", want, out.String())
+		}
+	}
+}

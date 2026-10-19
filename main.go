@@ -23,12 +23,14 @@ func run(args []string, stdout, stderr io.Writer) error {
 	var (
 		configPath string
 		verbose    bool
+		dryRun     bool
 	)
 
 	flags := flag.NewFlagSet("rawmanager", flag.ContinueOnError)
 	flags.SetOutput(stderr)
 	flags.StringVar(&configPath, "config", "", "Path to YAML configuration file (default: built-in configuration)")
 	flags.BoolVar(&verbose, "v", false, "Verbose mode (shows detailed output)")
+	flags.BoolVar(&dryRun, "dry-run", false, "Only show what would be done without changing any files")
 	if err := flags.Parse(args); err != nil {
 		if errors.Is(err, flag.ErrHelp) {
 			return nil
@@ -58,5 +60,6 @@ func run(args []string, stdout, stderr io.Writer) error {
 	proc := processor.NewImageProcessor(photosDir, cfg, verbose)
 	proc.Out = stdout
 	proc.ErrOut = stderr
+	proc.DryRun = dryRun
 	return proc.Process()
 }

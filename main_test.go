@@ -114,3 +114,16 @@ func TestRun_HelpIsNoError(t *testing.T) {
 		t.Errorf("run() error = %v, want nil", err)
 	}
 }
+
+func TestRun_DryRun(t *testing.T) {
+	dir := t.TempDir()
+	jpgPath, rawPath := createRatedPair(t, dir, "img", 1)
+
+	if err := run([]string{"-dry-run", dir}, io.Discard, io.Discard); err != nil {
+		t.Fatalf("run() error = %v", err)
+	}
+
+	if !fileExists(jpgPath) || !fileExists(rawPath) {
+		t.Error("Files were deleted in dry run")
+	}
+}

@@ -18,6 +18,7 @@ type ImageProcessor struct {
 	RootDir string
 	Config  *config.Config
 	Verbose bool
+	DryRun  bool      // only report the actions without changing any files
 	Out     io.Writer // progress bars and info messages
 	ErrOut  io.Writer // warnings
 
@@ -53,6 +54,17 @@ func (p *ImageProcessor) infof(format string, args ...interface{}) {
 // warnf always prints a message
 func (p *ImageProcessor) warnf(format string, args ...interface{}) {
 	p.printf(p.ErrOut, "Warning: "+format, args...)
+}
+
+// perform executes an action, or only reports it in dry-run mode.
+// The description names the action, e.g. "delete RAW <path>".
+func (p *ImageProcessor) perform(description string, action func() error) error {
+	if p.DryRun {
+		p.printf(p.Out, "[dry-run] Would %s\n", description)
+		return nil
+	}
+	p.infof("%s%s\n", strings.ToUpper(description[:1]), description[1:])
+	return action()
 }
 
 // printf prints a message without breaking the progress bars
@@ -206,32 +218,39 @@ func (p *ImageProcessor) processJPEG(jpgPath, rawPath string) error {
 	}
 
 	if action.DeleteRaw {
-		p.infof("Deleting RAW %s (Rating %d)\n", rawPath, rating)
-		if err := p.deleteFile(rawPath); err != nil {
+		description := fmt.Sprintf("delete RAW %s (Rating %d)", rawPath, rating)
+		if err := p.perform(description, func() error { return p.deleteFile(rawPath) }); err != nil {
 			return err
 		}
 	}
 
 	if action.DeleteJpeg {
-		p.infof("Deleting JPEG %s (Rating %d)\n", jpgPath, rating)
-		if err := p.deleteFile(jpgPath); err != nil {
+		description := fmt.Sprintf("delete JPEG %s (Rating %d)", jpgPath, rating)
+		if err := p.perform(description, func() error { return p.deleteFile(jpgPath) }); err != nil {
 			return err
 		}
 	}
 
 	if action.CompressJpeg {
-		p.infof("Compressing JPEG %s (Rating %d)\n", jpgPath, rating)
-		result, err := jpeg.ResizeWithXMP(jpgPath, p.Config.Process)
-		if err != nil {
+		description := fmt.Sprintf("compress JPEG %s (Rating %d)", jpgPath, rating)
+		if err := p.perform(description, func() error { return p.compressJpeg(jpgPath) }); err != nil {
 			return err
-		}
-		if result.Resized {
-			p.infof("Image %s resized to %dx%d pixels (EXIF and XMP data preserved)\n", jpgPath, result.Width, result.Height)
-		} else {
-			p.infof("Image %s is already small enough (%dx%d pixels)\n", jpgPath, result.Width, result.Height)
 		}
 	}
 
+	return nil
+}
+
+func (p *ImageProcessor) compressJpeg(jpgPath string) error {
+	result, err := jpeg.ResizeWithXMP(jpgPath, p.Config.Process)
+	if err != nil {
+		return err
+	}
+	if result.Resized {
+		p.infof("Image %s resized to %dx%d pixels (EXIF and XMP data preserved)\n", jpgPath, result.Width, result.Height)
+	} else {
+		p.infof("Image %s is already small enough (%dx%d pixels)\n", jpgPath, result.Width, result.Height)
+	}
 	return nil
 }
 
@@ -253,8 +272,8 @@ func (p *ImageProcessor) processRawFile(dir directoryPair, name string) error {
 	}
 
 	if p.Config.NoJpegAction.DeleteRaw {
-		p.infof("Deleting RAW %s (no JPEG found)\n", rawPath)
-		return p.deleteFile(rawPath)
+		description := fmt.Sprintf("delete RAW %s (no JPEG found)", rawPath)
+		return p.perform(description, func() error { return p.deleteFile(rawPath) })
 	}
 	return nil
 }
