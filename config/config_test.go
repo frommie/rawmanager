@@ -143,3 +143,19 @@ ratingActions:
 		t.Errorf("LoadConfig() error = %q, want it to name rating 1", err)
 	}
 }
+
+func TestLoadConfig_RejectsDeleteJpegWithCompressJpeg(t *testing.T) {
+	_, err := LoadConfig(writeConfig(t, `
+ratingActions:
+  2:
+    deleteRaw: true
+    deleteJpeg: true
+    compressJpeg: true
+`))
+	if err == nil {
+		t.Fatal("LoadConfig() error = nil, want error")
+	}
+	if !strings.Contains(err.Error(), "rating 2") {
+		t.Errorf("LoadConfig() error = %q, want it to name rating 2", err)
+	}
+}

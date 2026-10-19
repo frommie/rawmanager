@@ -92,8 +92,13 @@ func (c *Config) Validate() error {
 	}
 	sort.Ints(ratings)
 	for _, rating := range ratings {
-		if action := c.RatingActions[rating]; action.DeleteJpeg && !action.DeleteRaw {
+		action := c.RatingActions[rating]
+		if action.DeleteJpeg && !action.DeleteRaw {
 			return fmt.Errorf("invalid action for rating %d: deleteJpeg requires deleteRaw", rating)
+		}
+		// A deleted JPEG cannot be compressed
+		if action.DeleteJpeg && action.CompressJpeg {
+			return fmt.Errorf("invalid action for rating %d: deleteJpeg and compressJpeg cannot be combined", rating)
 		}
 	}
 	return nil

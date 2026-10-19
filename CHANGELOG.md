@@ -10,7 +10,7 @@ All notable changes to this project will be documented in this file.
 - Missing settings in the configuration file keep their default values;
   configured `ratingActions` replace the default rating actions
 - The configuration is rejected if a file extension is empty or a rating
-  action deletes the JPEG but keeps the RAW
+  action deletes the JPEG but keeps the RAW or deletes and compresses the JPEG
 - File extensions are matched case-insensitively
 - Warnings are always shown (on stderr); unrated JPEGs and JPEGs without RAW
   are only reported in verbose mode
