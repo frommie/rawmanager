@@ -1,6 +1,7 @@
 # rawmanager
 
 ![Version](https://img.shields.io/github/v/release/frommie/rawmanager)
+[![CI](https://github.com/frommie/rawmanager/actions/workflows/ci.yml/badge.svg)](https://github.com/frommie/rawmanager/actions/workflows/ci.yml)
 [![Go Report Card](https://goreportcard.com/badge/github.com/frommie/rawmanager)](https://goreportcard.com/report/github.com/frommie/rawmanager)
 [![License](https://img.shields.io/github/license/frommie/rawmanager)](LICENSE)
 
