@@ -43,12 +43,7 @@ func main() {
 		cfg = config.NewDefaultConfig()
 	}
 
-	proc := &processor.ImageProcessor{
-		RootDir: photosDir,
-		Config:  cfg,
-		Verbose: verbose,
-	}
-
+	proc := processor.NewImageProcessor(photosDir, cfg, verbose)
 	if err := proc.Process(); err != nil {
 		log.Fatal(err)
 	}

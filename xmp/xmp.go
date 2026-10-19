@@ -3,6 +3,7 @@ package xmp
 import (
 	"bytes"
 	"encoding/xml"
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -19,6 +20,9 @@ const (
 	// app1MarkerId is the marker for APP1 segments in JPEG files
 	app1MarkerId = 0xE1
 )
+
+// ErrNoRating is returned if an image has no rating, e.g. because it was never rated
+var ErrNoRating = errors.New("no rating found")
 
 type XmpMeta struct {
 	XMLName xml.Name `xml:"xmpmeta"`
@@ -78,7 +82,7 @@ func ExtractXmpData(jpegData []byte) ([]byte, error) {
 		}
 	}
 
-	return nil, fmt.Errorf("No XMP data found")
+	return nil, fmt.Errorf("no XMP data in JPEG: %w", ErrNoRating)
 }
 
 // GetRating reads the rating from XMP data
@@ -110,7 +114,7 @@ func GetRating(xmpData []byte) (int, error) {
 		return convertMSRating(msRating), nil
 	}
 
-	return 0, fmt.Errorf("No rating found in XMP data")
+	return 0, ErrNoRating
 }
 
 // convertMSRating converts a Microsoft rating (0-99) to a standard rating (0-5)

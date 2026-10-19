@@ -1,6 +1,7 @@
 package xmp
 
 import (
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -159,8 +160,8 @@ func TestExtractXmpData_NoXmp(t *testing.T) {
 		t.Fatalf("Setup failed: %v", err)
 	}
 
-	if _, err := ExtractXmpData(data); err == nil {
-		t.Error("ExtractXmpData() error = nil, want error")
+	if _, err := ExtractXmpData(data); !errors.Is(err, ErrNoRating) {
+		t.Errorf("ExtractXmpData() error = %v, want ErrNoRating", err)
 	}
 }
 

@@ -107,3 +107,23 @@ func TestLoadConfig_RejectsEmptyExtensions(t *testing.T) {
 		})
 	}
 }
+
+func TestFileConfig_IgnoresExtensionCase(t *testing.T) {
+	files := FileConfig{JpegExtension: ".jpg", RawExtension: ".RAF"}
+
+	for _, name := range []string{"a.jpg", "a.JPG", "a.Jpg"} {
+		if !files.IsJpeg(name) {
+			t.Errorf("IsJpeg(%q) = false, want true", name)
+		}
+	}
+	for _, name := range []string{"a.raf", "a.RAF"} {
+		if !files.IsRaw(name) {
+			t.Errorf("IsRaw(%q) = false, want true", name)
+		}
+	}
+	for _, name := range []string{"a.jpeg", "a.RAF.xmp", "jpg"} {
+		if files.IsJpeg(name) {
+			t.Errorf("IsJpeg(%q) = true, want false", name)
+		}
+	}
+}
