@@ -76,6 +76,7 @@ func TestGetRating(t *testing.T) {
 	}{
 		{"Adobe rating as element", `<rdf:Description xmlns:xmp="http://ns.adobe.com/xap/1.0/"><xmp:Rating>3</xmp:Rating></rdf:Description>`, 3},
 		{"Adobe rating as attribute", `<rdf:Description xmlns:xmp="http://ns.adobe.com/xap/1.0/" xmp:Rating="3"/>`, 3},
+		{"Rejected photo", `<rdf:Description xmlns:xmp="http://ns.adobe.com/xap/1.0/" xmp:Rating="-1"/>`, -1},
 		{"Microsoft rating 1", msRating(1), 1},
 		{"Microsoft rating 25", msRating(25), 2},
 		{"Microsoft rating 50", msRating(50), 3},

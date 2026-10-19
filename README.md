@@ -84,6 +84,17 @@ process:
   jpegQuality: 95        # JPEG quality (1-100)
 ```
 
+### Ratings
+
+The rating is read from the XMP data (`xmp:Rating`, or the Microsoft rating as fallback). JPEGs without a rating are skipped. Photos marked as rejected (e.g. in Lightroom) have the rating `-1` and can be handled like any other rating:
+
+```yaml
+ratingActions:
+  -1:
+    deleteRaw: true
+    deleteJpeg: true
+```
+
 ## Requirements
 
 - Go 1.22 or higher

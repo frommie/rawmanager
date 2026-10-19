@@ -187,3 +187,18 @@ func TestLoadConfig_AcceptsProcessSettingLimits(t *testing.T) {
 		}
 	}
 }
+
+func TestLoadConfig_RejectedRating(t *testing.T) {
+	cfg, err := LoadConfig(writeConfig(t, `
+ratingActions:
+  -1:
+    deleteRaw: true
+    deleteJpeg: true
+`))
+	if err != nil {
+		t.Fatalf("LoadConfig() error = %v", err)
+	}
+	if action := cfg.RatingActions[-1]; !action.DeleteRaw || !action.DeleteJpeg {
+		t.Errorf("RatingActions[-1] = %+v, want deleteRaw and deleteJpeg", action)
+	}
+}
