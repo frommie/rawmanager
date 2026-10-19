@@ -9,8 +9,8 @@ A tool to manage RAW image files based on their corresponding JPEG ratings.
 ## Features
 
 - Processes RAW+JPEG pairs in your photo library
-- Deletes or resize files based on JPEG ratings (1-5 stars)
-- Resizing preserves EXIF data
+- Deletes or resizes files based on JPEG ratings (1-5 stars)
+- Resizing preserves EXIF and XMP data
 - Supports embedded and separate XMP metadata
 - Configurable actions for each rating level
 - Progress bars and detailed logging (optional)
@@ -38,13 +38,13 @@ rawmanager [-config path/to/config.yaml] [-v] [directory]
 ```
 
 Options:
-- `-config`: Path to configuration file (default: config.yaml)
+- `-config`: Path to configuration file (default: built-in configuration, see below)
 - `-v`: Verbose output
 - `directory`: Directory to process (default: current directory)
 
 ## Configuration
 
-Create a `config.yaml` file to customize the behavior. The [default config](config.yaml) is as follows:
+Create a `config.yaml` file to customize the behavior and pass it with `-config`. Settings missing in your file keep their default values; if you specify `ratingActions`, only the ratings listed there have an action. The [default config](config.yaml) is as follows:
 
 ```yaml
 # Rating Actions (0-5)
@@ -84,9 +84,9 @@ process:
 
 ## Requirements
 
-- Go 1.16 or higher
+- Go 1.22 or higher
 - Operating systems: macOS, Linux, Windows
 
 ## License
 
-This project is licensed under the [MIT License](LICENSE.md).
+This project is licensed under the [MIT License](LICENSE).

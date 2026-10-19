@@ -22,7 +22,7 @@ func TestGetRatingFromSidecar(t *testing.T) {
 			name: "Rating 4 from XMP",
 			setupFunc: func(dir string) (string, error) {
 				xmpPath := filepath.Join(dir, "test.xmp")
-				err := CreateTestXMP(xmpPath, 4)
+				err := testutils.CreateTestXMP(t, xmpPath, 4)
 				return xmpPath, err
 			},
 			want:    4,
@@ -114,14 +114,14 @@ func TestReadRating(t *testing.T) {
 			name: "Separate .xmp file",
 			mode: config.XmpModeSeparate,
 			setup: func(t *testing.T, dir string) error {
-				return CreateTestXMP(filepath.Join(dir, "img.xmp"), 4)
+				return testutils.CreateTestXMP(t, filepath.Join(dir, "img.xmp"), 4)
 			},
 		},
 		{
 			name: "Separate .JPG.xmp file",
 			mode: config.XmpModeSeparateExt,
 			setup: func(t *testing.T, dir string) error {
-				return CreateTestXMP(filepath.Join(dir, "img.JPG.xmp"), 4)
+				return testutils.CreateTestXMP(t, filepath.Join(dir, "img.JPG.xmp"), 4)
 			},
 		},
 	}
@@ -163,18 +163,4 @@ func TestExtractXmpData_NoXmp(t *testing.T) {
 	if _, err := ExtractXmpData(data); !errors.Is(err, ErrNoRating) {
 		t.Errorf("ExtractXmpData() error = %v, want ErrNoRating", err)
 	}
-}
-
-// Help function for the tests
-func CreateTestXMP(path string, rating int) error {
-	xmpContent := fmt.Sprintf(`<?xpacket begin="" id="W5M0MpCehiHzreSzNTczkc9d"?>
-<x:xmpmeta xmlns:x="adobe:ns:meta/">
-    <rdf:RDF xmlns:rdf="http://www.w3.org/1999/02/22-rdf-syntax-ns#">
-        <rdf:Description rdf:about="" xmlns:xmp="http://ns.adobe.com/xap/1.0/">
-            <xmp:Rating>%d</xmp:Rating>
-        </rdf:Description>
-    </rdf:RDF>
-</x:xmpmeta>`, rating)
-
-	return os.WriteFile(path, []byte(xmpContent), 0644)
 }

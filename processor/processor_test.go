@@ -49,20 +49,20 @@ func createTestFiles(t *testing.T, jpgPath, rawPath string, rating int) error {
 
 	// Ensure parent directory exists
 	if err := os.MkdirAll(filepath.Dir(jpgPath), 0755); err != nil {
-		return fmt.Errorf("Error creating JPEG directory: %v", err)
+		return fmt.Errorf("error creating JPEG directory: %w", err)
 	}
 	if err := os.MkdirAll(filepath.Dir(rawPath), 0755); err != nil {
-		return fmt.Errorf("Error creating RAW directory: %v", err)
+		return fmt.Errorf("error creating RAW directory: %w", err)
 	}
 
 	// Create JPEG with rating in temporary directory
 	if err := testutils.CreateTestJPEGWithEmbeddedXMP(t, jpgPath, rating); err != nil {
-		return fmt.Errorf("Error creating test JPEG: %v", err)
+		return fmt.Errorf("error creating test JPEG: %w", err)
 	}
 
 	// Create empty RAW file in temporary directory
 	if err := os.WriteFile(rawPath, []byte("RAW"), 0644); err != nil {
-		return fmt.Errorf("Error creating test RAW: %v", err)
+		return fmt.Errorf("error creating test RAW: %w", err)
 	}
 
 	return nil

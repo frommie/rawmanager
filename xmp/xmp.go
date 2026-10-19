@@ -59,7 +59,7 @@ func ReadRating(jpgPath string, mode config.XmpMode) (int, error) {
 		return GetRatingFromSidecar(jpgPath + ".xmp")
 
 	default:
-		return 0, fmt.Errorf("Invalid XMP mode: %s", mode)
+		return 0, fmt.Errorf("invalid XMP mode: %s", mode)
 	}
 }
 
@@ -72,7 +72,7 @@ func IsXmpSegment(segment *jpegstructure.Segment) bool {
 func ExtractXmpData(jpegData []byte) ([]byte, error) {
 	intfc, err := jpegstructure.NewJpegMediaParser().ParseBytes(jpegData)
 	if err != nil {
-		return nil, fmt.Errorf("Error parsing JPEG file: %v", err)
+		return nil, fmt.Errorf("error parsing JPEG file: %w", err)
 	}
 
 	for _, segment := range intfc.(*jpegstructure.SegmentList).Segments() {
@@ -89,7 +89,7 @@ func ExtractXmpData(jpegData []byte) ([]byte, error) {
 func GetRating(xmpData []byte) (int, error) {
 	var xmp XmpMeta
 	if err := xml.Unmarshal(xmpData, &xmp); err != nil {
-		return 0, fmt.Errorf("Error parsing XMP data: %v", err)
+		return 0, fmt.Errorf("error parsing XMP data: %w", err)
 	}
 
 	// Ratings can be stored either as element or as attribute
@@ -100,7 +100,7 @@ func GetRating(xmpData []byte) (int, error) {
 	if adobeRating != "" {
 		rating := 0
 		if _, err := fmt.Sscanf(adobeRating, "%d", &rating); err != nil {
-			return 0, fmt.Errorf("Error parsing Adobe rating: %v", err)
+			return 0, fmt.Errorf("error parsing Adobe rating: %w", err)
 		}
 		return rating, nil
 	}
@@ -109,7 +109,7 @@ func GetRating(xmpData []byte) (int, error) {
 	if msRatingValue != "" {
 		var msRating int
 		if _, err := fmt.Sscanf(msRatingValue, "%d", &msRating); err != nil {
-			return 0, fmt.Errorf("Error parsing Microsoft rating: %v", err)
+			return 0, fmt.Errorf("error parsing Microsoft rating: %w", err)
 		}
 		return convertMSRating(msRating), nil
 	}
@@ -139,7 +139,7 @@ func firstNonEmpty(values ...string) string {
 func GetRatingFromSidecar(xmpPath string) (int, error) {
 	data, err := os.ReadFile(xmpPath)
 	if err != nil {
-		return 0, fmt.Errorf("Error reading XMP file: %v", err)
+		return 0, fmt.Errorf("error reading XMP file: %w", err)
 	}
 
 	return GetRating(data)

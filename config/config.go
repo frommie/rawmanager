@@ -2,9 +2,10 @@ package config
 
 import (
 	"fmt"
-	"gopkg.in/yaml.v3"
 	"os"
 	"strings"
+
+	"gopkg.in/yaml.v3"
 )
 
 type XmpMode string
@@ -72,7 +73,7 @@ func (c *Config) Validate() error {
 		XmpModeSeparateExt: true,
 	}
 	if !validModes[c.Xmp.Mode] {
-		return fmt.Errorf("Invalid XMP-Mode: %s", c.Xmp.Mode)
+		return fmt.Errorf("invalid XMP mode: %s", c.Xmp.Mode)
 	}
 
 	// An empty extension would match every file and could delete unrelated files
@@ -89,7 +90,7 @@ func (c *Config) Validate() error {
 func LoadConfig(path string) (*Config, error) {
 	data, err := os.ReadFile(path)
 	if err != nil {
-		return nil, fmt.Errorf("Error reading config file:: %v", err)
+		return nil, fmt.Errorf("error reading config file: %w", err)
 	}
 
 	// Start from defaults so that omitted values keep sensible settings
@@ -98,7 +99,7 @@ func LoadConfig(path string) (*Config, error) {
 	defaultRatingActions := cfg.RatingActions
 	cfg.RatingActions = nil
 	if err := yaml.Unmarshal(data, &cfg); err != nil {
-		return nil, fmt.Errorf("Error parsing YAML-config: %v", err)
+		return nil, fmt.Errorf("error parsing YAML config: %w", err)
 	}
 	if cfg.RatingActions == nil {
 		cfg.RatingActions = defaultRatingActions

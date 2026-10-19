@@ -3,13 +3,14 @@ package jpeg
 import (
 	"bytes"
 	"fmt"
+	"math"
+	"os"
+	"path/filepath"
+
 	"github.com/disintegration/imaging"
 	"github.com/dsoprea/go-jpeg-image-structure/v2"
 	"github.com/frommie/rawmanager/config"
 	"github.com/frommie/rawmanager/xmp"
-	"math"
-	"os"
-	"path/filepath"
 )
 
 const (
@@ -32,18 +33,18 @@ type ResizeResult struct {
 func ResizeWithXMP(jpgPath string, cfg config.ProcessConfig) (ResizeResult, error) {
 	data, err := os.ReadFile(jpgPath)
 	if err != nil {
-		return ResizeResult{}, fmt.Errorf("error reading file: %v", err)
+		return ResizeResult{}, fmt.Errorf("error reading file: %w", err)
 	}
 
 	segments, err := parseSegments(data)
 	if err != nil {
-		return ResizeResult{}, fmt.Errorf("error parsing JPEG file: %v", err)
+		return ResizeResult{}, fmt.Errorf("error parsing JPEG file: %w", err)
 	}
 	exifSegment, xmpSegment := extractMetadata(segments)
 
 	img, err := imaging.Decode(bytes.NewReader(data))
 	if err != nil {
-		return ResizeResult{}, fmt.Errorf("error decoding image: %v", err)
+		return ResizeResult{}, fmt.Errorf("error decoding image: %w", err)
 	}
 
 	width, height := img.Bounds().Dx(), img.Bounds().Dy()
@@ -59,7 +60,7 @@ func ResizeWithXMP(jpgPath string, cfg config.ProcessConfig) (ResizeResult, erro
 
 	var encoded bytes.Buffer
 	if err := imaging.Encode(&encoded, resized, imaging.JPEG, imaging.JPEGQuality(cfg.JpegQuality)); err != nil {
-		return ResizeResult{}, fmt.Errorf("error encoding resized image: %v", err)
+		return ResizeResult{}, fmt.Errorf("error encoding resized image: %w", err)
 	}
 
 	output, err := insertMetadata(encoded.Bytes(), exifSegment, xmpSegment)
@@ -68,7 +69,7 @@ func ResizeWithXMP(jpgPath string, cfg config.ProcessConfig) (ResizeResult, erro
 	}
 
 	if err := writeFileAtomic(jpgPath, output); err != nil {
-		return ResizeResult{}, fmt.Errorf("error saving resized JPEG: %v", err)
+		return ResizeResult{}, fmt.Errorf("error saving resized JPEG: %w", err)
 	}
 
 	return ResizeResult{Resized: true, Width: newWidth, Height: newHeight}, nil
@@ -100,7 +101,7 @@ func extractMetadata(segments []*jpegstructure.Segment) (exifSegment, xmpSegment
 func insertMetadata(jpegData []byte, exifSegment, xmpSegment *jpegstructure.Segment) ([]byte, error) {
 	segments, err := parseSegments(jpegData)
 	if err != nil {
-		return nil, fmt.Errorf("error parsing resized image: %v", err)
+		return nil, fmt.Errorf("error parsing resized image: %w", err)
 	}
 
 	// Insert after APP0 if present, otherwise directly after SOI
@@ -124,7 +125,7 @@ func insertMetadata(jpegData []byte, exifSegment, xmpSegment *jpegstructure.Segm
 
 	var buffer bytes.Buffer
 	if err := jpegstructure.NewSegmentList(newSegments).Write(&buffer); err != nil {
-		return nil, fmt.Errorf("error serializing JPEG data: %v", err)
+		return nil, fmt.Errorf("error serializing JPEG data: %w", err)
 	}
 	return buffer.Bytes(), nil
 }
