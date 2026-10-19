@@ -10,7 +10,7 @@ A tool to manage RAW image files based on their corresponding JPEG ratings.
 
 - Processes RAW+JPEG pairs in your photo library
 - Deletes or resizes files based on JPEG ratings (1-5 stars)
-- Resizing preserves EXIF and XMP data
+- Resizing preserves metadata (EXIF, XMP, ICC color profile)
 - Supports embedded and separate XMP metadata
 - Configurable actions for each rating level
 - Dry-run mode to preview all actions

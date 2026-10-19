@@ -102,3 +102,88 @@ func TestResizeWithXMP_DownsizesLargeImage(t *testing.T) {
 		t.Errorf("Expected only the resized image in directory, got %d entries", len(entries))
 	}
 }
+
+func TestResizeWithXMP_PreservesMetadataSegments(t *testing.T) {
+	jpgPath := filepath.Join(t.TempDir(), "large.jpg")
+	if err := imaging.Save(imaging.New(2000, 1500, color.White), jpgPath); err != nil {
+		t.Fatalf("Setup failed: %v", err)
+	}
+
+	// Minimal TIFF structure: little endian header and an empty IFD
+	exif := append([]byte("Exif\x00\x00"), "II*\x00\x08\x00\x00\x00\x00\x00\x00\x00\x00\x00"...)
+	icc := append([]byte("ICC_PROFILE\x00\x01\x01"), bytes.Repeat([]byte{0x42}, 128)...)
+	extendedXmp := append([]byte("http://ns.adobe.com/xmp/extension/\x00"), bytes.Repeat([]byte{0x43}, 64)...)
+	mpf := append([]byte("MPF\x00"), bytes.Repeat([]byte{0x44}, 16)...)
+	comment := []byte("test comment")
+
+	// Inserted in reverse order, as each segment is inserted directly after SOI
+	segments := []struct {
+		marker  byte
+		payload []byte
+	}{
+		{0xFE, comment},
+		{0xE2, mpf},
+		{0xE1, extendedXmp},
+		{0xE2, icc},
+		{0xE1, exif},
+	}
+	for _, seg := range segments {
+		if err := testutils.InsertSegment(t, jpgPath, seg.marker, seg.payload); err != nil {
+			t.Fatalf("Setup failed: %v", err)
+		}
+	}
+	if err := testutils.EmbedXMP(t, jpgPath, 3); err != nil {
+		t.Fatalf("Setup failed: %v", err)
+	}
+
+	// All metadata segments of the original except MPF, whose offsets would be invalid after re-encoding
+	want := metadataSegmentData(t, jpgPath)
+	if len(want) != 6 {
+		t.Fatalf("Setup created %d metadata segments, want 6", len(want))
+	}
+	want = append(want[:4], want[5])
+
+	cfg := config.NewDefaultConfig().Process
+	cfg.TargetMegapixels = 1.0
+	if result, err := ResizeWithXMP(jpgPath, cfg); err != nil || !result.Resized {
+		t.Fatalf("ResizeWithXMP() = %+v, %v, want resized", result, err)
+	}
+
+	got := metadataSegmentData(t, jpgPath)
+	if len(got) != len(want) {
+		t.Fatalf("Got %d metadata segments after resize, want %d (XMP, EXIF, ICC, extended XMP, comment)", len(got), len(want))
+	}
+	for i := range want {
+		if !bytes.Equal(got[i], want[i]) {
+			t.Errorf("Metadata segment %d differs after resize: got prefix %q, want %q", i, prefix(got[i]), prefix(want[i]))
+		}
+	}
+}
+
+// metadataSegmentData returns the data of all APPn and COM segments of a JPEG file in file order
+func metadataSegmentData(t *testing.T, path string) [][]byte {
+	t.Helper()
+	data, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatalf("Failed to read image: %v", err)
+	}
+	segments, err := parseSegments(data)
+	if err != nil {
+		t.Fatalf("Failed to parse image: %v", err)
+	}
+
+	var result [][]byte
+	for _, seg := range segments {
+		if (seg.MarkerId >= 0xE0 && seg.MarkerId <= 0xEF) || seg.MarkerId == 0xFE {
+			result = append(result, seg.Data)
+		}
+	}
+	return result
+}
+
+func prefix(data []byte) []byte {
+	if len(data) > 20 {
+		return data[:20]
+	}
+	return data
+}

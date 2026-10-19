@@ -10,15 +10,19 @@ import (
 	"github.com/disintegration/imaging"
 	"github.com/dsoprea/go-jpeg-image-structure/v2"
 	"github.com/frommie/rawmanager/config"
-	"github.com/frommie/rawmanager/xmp"
 )
 
 const (
-	// app0MarkerId is the marker for APP0 (JFIF) segments in JPEG files
-	app0MarkerId = 0xE0
+	// Markers of the application segments APP0 (JFIF), APP2 (e.g. ICC profile, MPF) and APP15
+	app0MarkerId  = 0xE0
+	app2MarkerId  = 0xE2
+	app15MarkerId = 0xEF
 
-	// app1MarkerId is the marker for APP1 segments in JPEG files (EXIF and XMP)
-	app1MarkerId = 0xE1
+	// comMarkerId is the marker for comment segments
+	comMarkerId = 0xFE
+
+	// mpfIdentifier identifies APP2 segments in the Multi-Picture Format
+	mpfIdentifier = "MPF\x00"
 )
 
 // ResizeResult describes the outcome of ResizeWithXMP
@@ -40,7 +44,7 @@ func ResizeWithXMP(jpgPath string, cfg config.ProcessConfig) (ResizeResult, erro
 	if err != nil {
 		return ResizeResult{}, fmt.Errorf("error parsing JPEG file: %w", err)
 	}
-	exifSegment, xmpSegment := extractMetadata(segments)
+	metadata := metadataSegments(segments)
 
 	img, err := imaging.Decode(bytes.NewReader(data))
 	if err != nil {
@@ -63,7 +67,7 @@ func ResizeWithXMP(jpgPath string, cfg config.ProcessConfig) (ResizeResult, erro
 		return ResizeResult{}, fmt.Errorf("error encoding resized image: %w", err)
 	}
 
-	output, err := insertMetadata(encoded.Bytes(), exifSegment, xmpSegment)
+	output, err := insertMetadata(encoded.Bytes(), metadata)
 	if err != nil {
 		return ResizeResult{}, err
 	}
@@ -83,22 +87,23 @@ func parseSegments(data []byte) ([]*jpegstructure.Segment, error) {
 	return intfc.(*jpegstructure.SegmentList).Segments(), nil
 }
 
-// extractMetadata returns the EXIF and XMP segments of a JPEG
-func extractMetadata(segments []*jpegstructure.Segment) (exifSegment, xmpSegment *jpegstructure.Segment) {
+// metadataSegments returns all segments of a JPEG that have to be preserved when re-encoding it:
+// APP1-APP15 (e.g. EXIF, XMP, ICC profile) and comments. APP0 (JFIF) is written by the encoder and
+// MPF is dropped, as its offsets to the embedded preview images would be invalid after re-encoding.
+func metadataSegments(segments []*jpegstructure.Segment) []*jpegstructure.Segment {
+	var result []*jpegstructure.Segment
 	for _, segment := range segments {
-		if segment.MarkerId == app1MarkerId {
-			if xmp.IsXmpSegment(segment) {
-				xmpSegment = segment
-			} else {
-				exifSegment = segment
-			}
+		isApp := segment.MarkerId > app0MarkerId && segment.MarkerId <= app15MarkerId
+		isMpf := segment.MarkerId == app2MarkerId && bytes.HasPrefix(segment.Data, []byte(mpfIdentifier))
+		if (isApp && !isMpf) || segment.MarkerId == comMarkerId {
+			result = append(result, segment)
 		}
 	}
-	return exifSegment, xmpSegment
+	return result
 }
 
-// insertMetadata adds the EXIF and XMP segments to the encoded JPEG data
-func insertMetadata(jpegData []byte, exifSegment, xmpSegment *jpegstructure.Segment) ([]byte, error) {
+// insertMetadata adds the metadata segments to the encoded JPEG data
+func insertMetadata(jpegData []byte, metadata []*jpegstructure.Segment) ([]byte, error) {
 	segments, err := parseSegments(jpegData)
 	if err != nil {
 		return nil, fmt.Errorf("error parsing resized image: %w", err)
@@ -115,12 +120,7 @@ func insertMetadata(jpegData []byte, exifSegment, xmpSegment *jpegstructure.Segm
 
 	var newSegments []*jpegstructure.Segment
 	newSegments = append(newSegments, segments[:insertPos]...)
-	if exifSegment != nil {
-		newSegments = append(newSegments, exifSegment)
-	}
-	if xmpSegment != nil {
-		newSegments = append(newSegments, xmpSegment)
-	}
+	newSegments = append(newSegments, metadata...)
 	newSegments = append(newSegments, segments[insertPos:]...)
 
 	var buffer bytes.Buffer

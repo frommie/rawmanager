@@ -247,7 +247,7 @@ func (p *ImageProcessor) compressJpeg(jpgPath string) error {
 		return err
 	}
 	if result.Resized {
-		p.infof("Image %s resized to %dx%d pixels (EXIF and XMP data preserved)\n", jpgPath, result.Width, result.Height)
+		p.infof("Image %s resized to %dx%d pixels (metadata preserved)\n", jpgPath, result.Width, result.Height)
 	} else {
 		p.infof("Image %s is already small enough (%dx%d pixels)\n", jpgPath, result.Width, result.Height)
 	}

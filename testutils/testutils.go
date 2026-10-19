@@ -48,19 +48,26 @@ func CreateTestJPEGWithEmbeddedXMP(t *testing.T, path string, rating int) error 
 // EmbedXMP inserts an APP1 segment with XMP rating data into an existing JPEG file.
 func EmbedXMP(t *testing.T, path string, rating int) error {
 	t.Helper()
+	// APP1 segment: namespace, null byte and XMP packet
+	payload := append([]byte("http://ns.adobe.com/xap/1.0/\x00"), xmpPacket(rating)...)
+	return InsertSegment(t, path, 0xE1, payload)
+}
+
+// InsertSegment inserts a segment with the given marker and payload directly after the SOI marker
+// of an existing JPEG file.
+func InsertSegment(t *testing.T, path string, marker byte, payload []byte) error {
+	t.Helper()
 
 	data, err := os.ReadFile(path)
 	if err != nil {
 		return fmt.Errorf("error reading JPEG: %w", err)
 	}
 
-	// APP1 segment: namespace, null byte and XMP packet
-	payload := append([]byte("http://ns.adobe.com/xap/1.0/\x00"), xmpPacket(rating)...)
 	length := len(payload) + 2 // length field includes itself
 
 	newData := make([]byte, 0, len(data)+len(payload)+4)
 	newData = append(newData, 0xFF, 0xD8)                         // SOI marker
-	newData = append(newData, 0xFF, 0xE1)                         // APP1 marker
+	newData = append(newData, 0xFF, marker)                       // segment marker
 	newData = append(newData, byte(length>>8), byte(length&0xFF)) // segment length
 	newData = append(newData, payload...)
 	newData = append(newData, data[2:]...) // rest of the original JPEG after SOI

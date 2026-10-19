@@ -22,6 +22,8 @@ All notable changes to this project will be documented in this file.
 - Microsoft ratings were converted incorrectly (e.g. 99 became 4 stars)
 - `noJpegAction.deleteRaw: false` was ignored
 - Progress bars did not match the processed files
+- Compression dropped the ICC color profile and other metadata segments;
+  extended XMP could replace the EXIF data
 
 ## [1.0.0] - 2024-05-04
 ### Added
